@@ -39,14 +39,14 @@ def pick_provider(model: str, providers: list[Provider],
     if _mode != "auto":
         for p in providers:
             if p.name == _mode and p.name not in tried:
-                if p.supports_model(model) and registry.is_healthy(p.name):
+                if p.is_ready and p.supports_model(model) and registry.is_healthy(p.name):
                     return p
         return None
 
     for p in sorted(providers, key=lambda x: x.priority):
         if p.name in tried:
             continue
-        if p.supports_model(model) and registry.is_healthy(p.name):
+        if p.is_ready and p.supports_model(model) and registry.is_healthy(p.name):
             return p
     return None
 

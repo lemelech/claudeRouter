@@ -42,8 +42,8 @@ def _config_path() -> Path:
     return base / "claudeRouter" / "config.toml"
 
 
-def load(path: Path | None = None) -> Config:
-    p = path or _config_path()
+def load(path: Path | str | None = None) -> Config:
+    p = Path(path) if path is not None else _config_path()
     if not p.exists():
         raise FileNotFoundError(
             f"Config not found: {p}\n"

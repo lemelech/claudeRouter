@@ -25,6 +25,13 @@ class Provider:
     def health_path(self) -> str:
         return self._cfg.health_path
 
+    @property
+    def is_ready(self) -> bool:
+        """False if this provider requires an API key that wasn't found in the environment."""
+        if self._cfg.auth_style != "none" and not self._cfg.api_key:
+            return False
+        return True
+
     def supports_model(self, requested: str) -> bool:
         return requested in self._cfg.models or requested in self._cfg.model_map
 
