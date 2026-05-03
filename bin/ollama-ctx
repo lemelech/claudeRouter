@@ -7,58 +7,70 @@
 # Options:
 #   -n, --num-ctx N      Context window size (default: 65536)
 #   -s, --ssh HOST       Run on remote host via SSH (e.g. user@192.168.1.1)
-#   -w, --windows        Remote host is Windows (use PowerShell syntax over SSH)
+#   -w, --windows        Force PowerShell mode for remote SSH (auto-detected by default)
 #   -o, --output NAME    Override output model name (only valid for a single MODEL)
 #   -l, --list [HOST]    List models on local or remote Ollama (no creation)
-#       --port P         Ollama port for --list (default: 11434)
+#       --port P         Ollama API port (default: 11434)
+#       --dry-run        Print commands without executing
+#       --no-verify      Skip post-creation context window check
 #   -h, --help           Show this help
 #
 # Output name is derived automatically: base-claude:tag
-#   qwen3:14b            → qwen3-claude:14b
-#   gemma4:e4b           → gemma4-claude:e4b
-#   llama3.1:8b          → llama3.1-claude:8b
-#   mymodel              → mymodel-claude
+#   qwen3:14b            -> qwen3-claude:14b
+#   gemma4:e4b           -> gemma4-claude:e4b
+#   llama3.1:8b          -> llama3.1-claude:8b
+#   mymodel              -> mymodel-claude
+#
+# Platform support:
+#   Run script on:  Linux, macOS, WSL (requires bash 3.2+, curl, python3)
+#   Remote targets: Linux, macOS, Windows (PowerShell 5+)
+#   Windows auto-detected via SSH; override with -w if detection is slow/wrong
 #
 # Examples:
-#   ollama-ctx qwen3:14b                         # local, 65536 ctx
-#   ollama-ctx qwen3:14b gemma4:e4b              # multiple models
-#   ollama-ctx qwen3:14b -n 131072               # custom ctx size
-#   ollama-ctx qwen3:14b -s REMOTE_OLLAMA_IP         # remote Linux/macOS via SSH
-#   ollama-ctx qwen3:14b -s REMOTE_OLLAMA_IP -w      # remote Windows via SSH
-#   ollama-ctx -l                                # list local models
-#   ollama-ctx -l REMOTE_OLLAMA_IP                   # list remote models via API
+#   ollama-ctx qwen3:14b                       # local, 65536 ctx
+#   ollama-ctx qwen3:14b gemma4:e4b            # multiple models, local
+#   ollama-ctx qwen3:14b -n 131072             # custom ctx size
+#   ollama-ctx qwen3:14b -s REMOTE_OLLAMA_IP       # remote (OS auto-detected)
+#   ollama-ctx qwen3:14b -s user@host -w       # force Windows/PowerShell mode
+#   ollama-ctx --dry-run qwen3:14b -s host     # preview without executing
+#   ollama-ctx -l                              # list local models
+#   ollama-ctx -l REMOTE_OLLAMA_IP                 # list remote models via API
 
 set -euo pipefail
 
 NUM_CTX=65536
 SSH_HOST=""
-WINDOWS=false
+WINDOWS=""          # empty = auto-detect, "true"/"false" = forced
 OUTPUT_NAME=""
 LIST_MODE=false
 LIST_HOST="localhost"
 OLLAMA_PORT=11434
+DRY_RUN=false
+VERIFY=true
 MODELS=()
 
 usage() {
-    sed -n '2,/^$/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
+    grep '^#' "$0" | sed 's/^# \{0,1\}//' | sed -n '2,/^$/p'
     exit 0
 }
 
 # ── Arg parsing ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -n|--num-ctx)   NUM_CTX="$2";    shift 2 ;;
-        -s|--ssh)       SSH_HOST="$2";   shift 2 ;;
-        -w|--windows)   WINDOWS=true;    shift   ;;
+        -n|--num-ctx)   NUM_CTX="$2";     shift 2 ;;
+        -s|--ssh)       SSH_HOST="$2";    shift 2 ;;
+        -w|--windows)   WINDOWS=true;     shift   ;;
         -o|--output)    OUTPUT_NAME="$2"; shift 2 ;;
         -l|--list)
             LIST_MODE=true
             [[ $# -gt 1 && "${2:0:1}" != "-" ]] && { LIST_HOST="$2"; shift; }
             shift ;;
         --port)         OLLAMA_PORT="$2"; shift 2 ;;
+        --dry-run)      DRY_RUN=true;     shift   ;;
+        --no-verify)    VERIFY=false;     shift   ;;
         -h|--help)      usage ;;
-        -*)             echo "Unknown option: $1" >&2; exit 1 ;;
-        *)              MODELS+=("$1"); shift ;;
+        -*)             echo "Error: unknown option: $1" >&2; exit 1 ;;
+        *)              MODELS+=("$1");   shift ;;
     esac
 done
 
@@ -69,7 +81,7 @@ if $LIST_MODE; then
 import json, sys
 data = json.load(sys.stdin)
 models = sorted(data['models'], key=lambda m: m['name'])
-print(f'{'NAME':<35} {'SIZE':>8}  FAMILY')
+print(f\"{'NAME':<35} {'SIZE':>8}  FAMILY\")
 print('-' * 60)
 for m in models:
     size_gb = m['size'] / 1e9
@@ -81,16 +93,13 @@ fi
 
 # ── Validate ──────────────────────────────────────────────────────────────────
 if [[ ${#MODELS[@]} -eq 0 ]]; then
-    echo "Error: no models specified. Use -h for help." >&2
-    exit 1
+    echo "Error: no models specified. Use -h for help." >&2; exit 1
 fi
-
 if [[ -n "$OUTPUT_NAME" && ${#MODELS[@]} -gt 1 ]]; then
-    echo "Error: --output can only be used with a single model." >&2
-    exit 1
+    echo "Error: --output can only be used with a single model." >&2; exit 1
 fi
 
-# ── Name derivation ───────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 derive_name() {
     local model="$1"
     if [[ "$model" == *:* ]]; then
@@ -100,49 +109,130 @@ derive_name() {
     fi
 }
 
-# ── Command runners ───────────────────────────────────────────────────────────
+# API host for verification: SSH host IP (strip user@ prefix) or localhost
+api_host() {
+    if [[ -n "$SSH_HOST" ]]; then
+        echo "${SSH_HOST##*@}"
+    else
+        echo "localhost"
+    fi
+}
+
+verify_ctx() {
+    local model="$1" host
+    host=$(api_host)
+    local result
+    result=$(curl -fsS --max-time 5 -X POST "http://${host}:${OLLAMA_PORT}/api/show" \
+        -d "{\"name\":\"${model}\"}" 2>/dev/null) || { echo "  (verify: API unreachable)"; return; }
+    echo "$result" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+params = d.get('parameters', '')
+lines = [l for l in params.splitlines() if 'num_ctx' in l]
+if lines:
+    val = lines[0].split()[-1]
+    print(f'  verified num_ctx={val}')
+else:
+    print('  WARNING: num_ctx not found in model parameters')
+"
+}
+
+# ── OS detection over SSH ─────────────────────────────────────────────────────
+is_windows_ssh() {
+    local host="$1"
+    # powershell.exe is present on Windows; absent on Linux/macOS
+    ssh -o ConnectTimeout=5 -o BatchMode=yes "$host" \
+        "powershell.exe -Command 'exit 0'" >/dev/null 2>&1
+}
+
+# ── Modelfile creation ────────────────────────────────────────────────────────
+# The modelfile content is two lines:
+#   FROM <source>
+#   PARAMETER num_ctx <N>
+# Portability notes:
+#   - mktemp with no args uses $TMPDIR on macOS, /tmp on Linux — both correct
+#   - printf 'FROM %s\n...' is POSIX and works on bash/dash/zsh
+#   - On Windows we use PowerShell's Out-File (UTF-8, LF-safe)
+
 run_local() {
     local src="$1" dst="$2" ctx="$3"
     local mf
-    mf=$(mktemp /tmp/ollama-ctx-XXXXXX.Modelfile)
+    mf=$(mktemp)
     printf 'FROM %s\nPARAMETER num_ctx %d\n' "$src" "$ctx" > "$mf"
     ollama create "$dst" -f "$mf"
     rm -f "$mf"
 }
 
+# Single-quoted heredoc passed as stdin to bash on the remote side.
+# Variables are expanded locally before being sent — intentional.
 run_ssh_unix() {
     local host="$1" src="$2" dst="$3" ctx="$4"
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" \
-        "mf=\$(mktemp /tmp/ollama-ctx-XXXXXX.Modelfile) && \
-         printf 'FROM ${src}\nPARAMETER num_ctx ${ctx}\n' > \"\$mf\" && \
-         ollama create '${dst}' -f \"\$mf\"; \
-         rm -f \"\$mf\""
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" bash << ENDSSH
+mf=\$(mktemp)
+printf 'FROM ${src}\nPARAMETER num_ctx ${ctx}\n' > "\$mf"
+ollama create '${dst}' -f "\$mf"
+rm -f "\$mf"
+ENDSSH
 }
 
+# PowerShell heredoc via SSH. Here-string (@"..."@) is safe with newlines.
+# We write UTF-8 explicitly to avoid BOM issues with ollama on Windows.
 run_ssh_windows() {
     local host="$1" src="$2" dst="$3" ctx="$4"
-    # PowerShell via SSH — uses backtick for newline, Out-File for proper encoding
     ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" \
-        "powershell -Command \"\
-\$mf = \\\"\$env:TEMP\\\\_ollama_ctx_$$.Modelfile\\\"; \
-\\\"FROM ${src}\`nPARAMETER num_ctx ${ctx}\\\" | Out-File \\\"\$mf\\\" -Encoding utf8; \
-ollama create '${dst}' -f \\\"\$mf\\\"; \
-Remove-Item \\\"\$mf\\\" -ErrorAction SilentlyContinue\""
+        "powershell -NoProfile -Command \"\
+\$mf = [System.IO.Path]::GetTempFileName(); \
+[System.IO.File]::WriteAllText(\$mf, \\\"FROM ${src}\`nPARAMETER num_ctx ${ctx}\`n\\\", \
+  [System.Text.Encoding]::UTF8); \
+ollama create '${dst}' -f \$mf; \
+Remove-Item \$mf -ErrorAction SilentlyContinue\""
 }
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
+# Resolve Windows flag once (before the loop) if SSH and auto-detect requested
+USE_WINDOWS=false
+if [[ -n "$SSH_HOST" ]]; then
+    if [[ "$WINDOWS" == "true" ]]; then
+        USE_WINDOWS=true
+    elif [[ -z "$WINDOWS" ]]; then
+        echo "Detecting remote OS on ${SSH_HOST}..."
+        if is_windows_ssh "$SSH_HOST"; then
+            echo "  -> Windows (PowerShell mode)"
+            USE_WINDOWS=true
+        else
+            echo "  -> Unix mode"
+        fi
+    fi
+fi
+
 for model in "${MODELS[@]}"; do
     output="${OUTPUT_NAME:-$(derive_name "$model")}"
-    target="${SSH_HOST:+$SSH_HOST }${SSH_HOST:+(remote) }${SSH_HOST:-local}"
-    echo "Creating ${output} from ${model}  [num_ctx=${NUM_CTX}, ${target}]"
+    location="${SSH_HOST:-local}"
+    echo ""
+    echo "==> ${model}  ->  ${output}  [num_ctx=${NUM_CTX}, ${location}]"
+
+    if $DRY_RUN; then
+        if [[ -z "$SSH_HOST" ]]; then
+            echo "    [dry-run] would run: ollama create '${output}' -f <(printf 'FROM ${model}\\nPARAMETER num_ctx ${NUM_CTX}\\n')"
+        elif $USE_WINDOWS; then
+            echo "    [dry-run] would run PowerShell on ${SSH_HOST}: ollama create '${output}' (FROM ${model}, num_ctx=${NUM_CTX})"
+        else
+            echo "    [dry-run] would run on ${SSH_HOST}: ollama create '${output}' (FROM ${model}, num_ctx=${NUM_CTX})"
+        fi
+        continue
+    fi
 
     if [[ -z "$SSH_HOST" ]]; then
         run_local "$model" "$output" "$NUM_CTX"
-    elif $WINDOWS; then
+    elif $USE_WINDOWS; then
         run_ssh_windows "$SSH_HOST" "$model" "$output" "$NUM_CTX"
     else
         run_ssh_unix "$SSH_HOST" "$model" "$output" "$NUM_CTX"
     fi
 
-    echo "✓ ${output}"
+    if $VERIFY; then
+        verify_ctx "$output"
+    fi
+
+    echo "Done: ${output}"
 done
