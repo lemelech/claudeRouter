@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# ollama-ctx — create num_ctx variants of Ollama models for use with Claude Code
+#
+# Usage:
+#   ollama-ctx [OPTIONS] MODEL [MODEL...]
+#
+# Options:
+#   -n, --num-ctx N      Context window size (default: 65536)
+#   -s, --ssh HOST       Run on remote host via SSH (e.g. user@192.168.1.1)
+#   -w, --windows        Remote host is Windows (use PowerShell syntax over SSH)
+#   -o, --output NAME    Override output model name (only valid for a single MODEL)
+#   -l, --list [HOST]    List models on local or remote Ollama (no creation)
+#       --port P         Ollama port for --list (default: 11434)
+#   -h, --help           Show this help
+#
+# Output name is derived automatically: base-claude:tag
+#   qwen3:14b            → qwen3-claude:14b
+#   gemma4:e4b           → gemma4-claude:e4b
+#   llama3.1:8b          → llama3.1-claude:8b
+#   mymodel              → mymodel-claude
+#
+# Examples:
+#   ollama-ctx qwen3:14b                         # local, 65536 ctx
+#   ollama-ctx qwen3:14b gemma4:e4b              # multiple models
+#   ollama-ctx qwen3:14b -n 131072               # custom ctx size
+#   ollama-ctx qwen3:14b -s REMOTE_OLLAMA_IP         # remote Linux/macOS via SSH
+#   ollama-ctx qwen3:14b -s REMOTE_OLLAMA_IP -w      # remote Windows via SSH
+#   ollama-ctx -l                                # list local models
+#   ollama-ctx -l REMOTE_OLLAMA_IP                   # list remote models via API
+
+set -euo pipefail
+
+NUM_CTX=65536
+SSH_HOST=""
+WINDOWS=false
+OUTPUT_NAME=""
+LIST_MODE=false
+LIST_HOST="localhost"
+OLLAMA_PORT=11434
+MODELS=()
+
+usage() {
+    sed -n '2,/^$/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
+    exit 0
+}
+
+# ── Arg parsing ───────────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -n|--num-ctx)   NUM_CTX="$2";    shift 2 ;;
+        -s|--ssh)       SSH_HOST="$2";   shift 2 ;;
+        -w|--windows)   WINDOWS=true;    shift   ;;
+        -o|--output)    OUTPUT_NAME="$2"; shift 2 ;;
+        -l|--list)
+            LIST_MODE=true
+            [[ $# -gt 1 && "${2:0:1}" != "-" ]] && { LIST_HOST="$2"; shift; }
+            shift ;;
+        --port)         OLLAMA_PORT="$2"; shift 2 ;;
+        -h|--help)      usage ;;
+        -*)             echo "Unknown option: $1" >&2; exit 1 ;;
+        *)              MODELS+=("$1"); shift ;;
+    esac
+done
+
+# ── List mode ─────────────────────────────────────────────────────────────────
+if $LIST_MODE; then
+    curl -fsS --max-time 5 "http://${LIST_HOST}:${OLLAMA_PORT}/api/tags" \
+    | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+models = sorted(data['models'], key=lambda m: m['name'])
+print(f'{'NAME':<35} {'SIZE':>8}  FAMILY')
+print('-' * 60)
+for m in models:
+    size_gb = m['size'] / 1e9
+    family = m['details'].get('family', '?')
+    print(f\"{m['name']:<35} {size_gb:>6.1f}G  {family}\")
+"
+    exit 0
+fi
+
+# ── Validate ──────────────────────────────────────────────────────────────────
+if [[ ${#MODELS[@]} -eq 0 ]]; then
+    echo "Error: no models specified. Use -h for help." >&2
+    exit 1
+fi
+
+if [[ -n "$OUTPUT_NAME" && ${#MODELS[@]} -gt 1 ]]; then
+    echo "Error: --output can only be used with a single model." >&2
+    exit 1
+fi
+
+# ── Name derivation ───────────────────────────────────────────────────────────
+derive_name() {
+    local model="$1"
+    if [[ "$model" == *:* ]]; then
+        echo "${model%%:*}-claude:${model#*:}"
+    else
+        echo "${model}-claude"
+    fi
+}
+
+# ── Command runners ───────────────────────────────────────────────────────────
+run_local() {
+    local src="$1" dst="$2" ctx="$3"
+    local mf
+    mf=$(mktemp /tmp/ollama-ctx-XXXXXX.Modelfile)
+    printf 'FROM %s\nPARAMETER num_ctx %d\n' "$src" "$ctx" > "$mf"
+    ollama create "$dst" -f "$mf"
+    rm -f "$mf"
+}
+
+run_ssh_unix() {
+    local host="$1" src="$2" dst="$3" ctx="$4"
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" \
+        "mf=\$(mktemp /tmp/ollama-ctx-XXXXXX.Modelfile) && \
+         printf 'FROM ${src}\nPARAMETER num_ctx ${ctx}\n' > \"\$mf\" && \
+         ollama create '${dst}' -f \"\$mf\"; \
+         rm -f \"\$mf\""
+}
+
+run_ssh_windows() {
+    local host="$1" src="$2" dst="$3" ctx="$4"
+    # PowerShell via SSH — uses backtick for newline, Out-File for proper encoding
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" \
+        "powershell -Command \"\
+\$mf = \\\"\$env:TEMP\\\\_ollama_ctx_$$.Modelfile\\\"; \
+\\\"FROM ${src}\`nPARAMETER num_ctx ${ctx}\\\" | Out-File \\\"\$mf\\\" -Encoding utf8; \
+ollama create '${dst}' -f \\\"\$mf\\\"; \
+Remove-Item \\\"\$mf\\\" -ErrorAction SilentlyContinue\""
+}
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+for model in "${MODELS[@]}"; do
+    output="${OUTPUT_NAME:-$(derive_name "$model")}"
+    target="${SSH_HOST:+$SSH_HOST }${SSH_HOST:+(remote) }${SSH_HOST:-local}"
+    echo "Creating ${output} from ${model}  [num_ctx=${NUM_CTX}, ${target}]"
+
+    if [[ -z "$SSH_HOST" ]]; then
+        run_local "$model" "$output" "$NUM_CTX"
+    elif $WINDOWS; then
+        run_ssh_windows "$SSH_HOST" "$model" "$output" "$NUM_CTX"
+    else
+        run_ssh_unix "$SSH_HOST" "$model" "$output" "$NUM_CTX"
+    fi
+
+    echo "✓ ${output}"
+done
