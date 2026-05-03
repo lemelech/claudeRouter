@@ -1,0 +1,18 @@
+[project]
+name = "clauderouter"
+version = "0.1.0"
+description = "Local HTTP proxy between Claude Code and AI providers with auto-fallback and mid-session switching"
+authors = [
+    { name = "Your Name", email = "your@email.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+]
+
+[project.scripts]
+claudeRouter = "clauderouter.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
