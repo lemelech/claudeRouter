@@ -44,11 +44,19 @@ models = [
 ]
 
 # Map incoming Claude model name → actual Ollama model name.
-# Fill in the models you have pulled on your remote machine.
+# Create 64k-context variants on the remote machine first:
+#   printf 'FROM qwen3:14b\nPARAMETER num_ctx 65536\n' > /tmp/mf && ollama create qwen3-claude:14b -f /tmp/mf
+#   printf 'FROM gemma4:e4b\nPARAMETER num_ctx 65536\n' > /tmp/mf && ollama create gemma4-claude:e4b -f /tmp/mf
 [providers.model_map]
-"claude-opus-4-7"   = "TBD"   # e.g. "qwen3:32b"
-"claude-sonnet-4-6" = "TBD"   # e.g. "qwen3-coder:14b"
-"claude-haiku-4-5"  = "TBD"   # e.g. "llama3.2:3b"
+"claude-opus-4-7"   = "qwen3-claude:14b"
+"claude-sonnet-4-6" = "qwen3-claude:14b"
+"claude-haiku-4-5"  = "gemma4-claude:e4b"
+
+# extra_body is merged into every forwarded request (low-priority defaults).
+# Ollama's Anthropic compat layer may or may not honor options.num_ctx here;
+# the modelfile approach above is the reliable way to set context window.
+[providers.extra_body]
+options = {num_ctx = 65536}
 
 # ── Provider 3: Ollama (cloud-routed model) ──────────────────────────────────
 # Local Ollama instance using a model that routes through a cloud provider.

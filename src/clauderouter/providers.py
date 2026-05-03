@@ -26,6 +26,10 @@ class Provider:
         return self._cfg.health_path
 
     @property
+    def extra_body(self) -> dict:
+        return self._cfg.extra_body
+
+    @property
     def is_ready(self) -> bool:
         """False if this provider requires an API key that wasn't found in the environment."""
         if self._cfg.auth_style != "none" and not self._cfg.api_key:

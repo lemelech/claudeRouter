@@ -84,7 +84,7 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
             )
 
         upstream_url = provider.base_url + request.path_qs
-        mutated = dict(body)
+        mutated = {**provider.extra_body, **body}   # extra_body is low-prio defaults
         mutated["model"] = provider.translate_model(requested_model)
         upstream_body = json.dumps(mutated).encode()
 
