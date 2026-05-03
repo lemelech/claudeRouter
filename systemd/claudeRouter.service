@@ -1,0 +1,19 @@
+[Unit]
+Description=claudeRouter — local AI provider proxy for Claude Code
+# Start after network is available (Tailscale may not be up yet, but health probes handle that)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claudeRouter --no-log-file
+Restart=on-failure
+RestartSec=3
+# Keep stdout unbuffered so journald shows logs immediately
+Environment=PYTHONUNBUFFERED=1
+# API keys are read from the login session's environment via PAM/systemd user env.
+# If that doesn't work, uncomment and use an EnvironmentFile instead:
+# EnvironmentFile=%h/.config/claudeRouter/env
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# cc — Claude Code launcher with claudeRouter proxy
+#
+# Usage: cc [claude args...]
+#   Ensures the proxy is running, then execs `claude` with ANTHROPIC_BASE_URL set.
+
+set -euo pipefail
+
+PROXY_URL="http://localhost:4891"
+HEALTH_URL="${PROXY_URL}/control/health"
+LOG_FILE="${HOME}/.cache/claudeRouter/proxy.log"
+PID_FILE="${HOME}/.cache/claudeRouter/proxy.pid"
+CLAUDE_JSON="${HOME}/claude.json"
+
+# ── Fix onboarding bypass bug ────────────────────────────────────────────────
+# Claude Code connects directly to api.anthropic.com during first-time setup
+# unless hasCompletedOnboarding is set. Ensure it's set so the proxy is used.
+if [ -f "${CLAUDE_JSON}" ]; then
+    if ! grep -q '"hasCompletedOnboarding"' "${CLAUDE_JSON}" 2>/dev/null; then
+        python3 -c "
+import json, sys
+p = '${CLAUDE_JSON}'
+with open(p) as f: d = json.load(f)
+d.setdefault('hasCompletedOnboarding', True)
+with open(p, 'w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null || true
+    fi
+fi
+
+# ── Check if proxy is alive ───────────────────────────────────────────────────
+proxy_alive() {
+    curl -fsS --max-time 1 "${HEALTH_URL}" >/dev/null 2>&1
+}
+
+# ── Start proxy if not running ────────────────────────────────────────────────
+if ! proxy_alive; then
+    mkdir -p "$(dirname "${LOG_FILE}")"
+    echo "[cc] Starting claudeRouter proxy..." >&2
+    nohup claudeRouter >>"${LOG_FILE}" 2>&1 &
+    echo $! >"${PID_FILE}"
+
+    # Wait up to 5s for the proxy to come up
+    for i in $(seq 1 10); do
+        sleep 0.5
+        if proxy_alive; then
+            echo "[cc] Proxy started (PID $(cat "${PID_FILE}"))." >&2
+            break
+        fi
+        if [ "${i}" -eq 10 ]; then
+            echo "[cc] ERROR: proxy did not start in time. Check ${LOG_FILE}" >&2
+            exit 1
+        fi
+    done
+fi
+
+# ── Launch Claude Code ────────────────────────────────────────────────────────
+# ANTHROPIC_BASE_URL is set redundantly here so `cc` works even if ~/.profile
+# wasn't sourced (e.g. non-login shell, direct invocation).
+exec env ANTHROPIC_BASE_URL="${PROXY_URL}" claude "$@"
