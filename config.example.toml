@@ -1,0 +1,86 @@
+# claudeRouter configuration template
+# Copy to ~/.config/claudeRouter/config.toml and fill in your values.
+
+[server]
+port = 4891
+health_interval_secs = 30   # how often to probe each provider (seconds)
+
+# ── Provider 1: Anthropic API ────────────────────────────────────────────────
+# Full Claude models. Requires internet + API key.
+# Set ANTHROPIC_API_KEY in your environment (or ~/.profile).
+[[providers]]
+name        = "anthropic"
+priority    = 1
+base_url    = "https://api.anthropic.com"
+auth_style  = "x-api-key"   # sends key as x-api-key header
+api_key_env = "ANTHROPIC_API_KEY"
+health_path = "/v1/models"
+# Models advertised as available from this provider.
+# The proxy uses this list to know whether to route a request here.
+# No model_map needed — pass model names through unchanged.
+models = [
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+]
+
+# ── Provider 2: Remote Ollama (Tailscale) ────────────────────────────────────
+# Capable home machine, requires Tailscale connectivity.
+# Ollama ≥ v0.14.0 speaks the Anthropic Messages API natively.
+# The proxy only rewrites the model name + auth header.
+[[providers]]
+name        = "remote-ollama"
+priority    = 2
+base_url    = "http://REMOTE_OLLAMA_IP:11434"
+auth_style  = "none"        # Ollama needs no auth by default
+health_path = "/api/tags"
+# List the *Claude* model names this provider will accept.
+# They get translated to real Ollama model names via model_map below.
+models = [
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+]
+
+# Map incoming Claude model name → actual Ollama model name.
+# Fill in the models you have pulled on your remote machine.
+[providers.model_map]
+"claude-opus-4-7"   = "TBD"   # e.g. "qwen3:32b"
+"claude-sonnet-4-6" = "TBD"   # e.g. "qwen3-coder:14b"
+"claude-haiku-4-5"  = "TBD"   # e.g. "llama3.2:3b"
+
+# ── Provider 3: Ollama (cloud-routed model) ──────────────────────────────────
+# Local Ollama instance using a model that routes through a cloud provider.
+# Requires internet but no Anthropic credits.
+[[providers]]
+name        = "ollama-cloud"
+priority    = 3
+base_url    = "http://localhost:11434"
+auth_style  = "none"
+health_path = "/api/tags"
+models = [
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+]
+
+[providers.model_map]
+"claude-sonnet-4-6" = "TBD"   # e.g. "hf.co/some-cloud-routed-model"
+"claude-haiku-4-5"  = "TBD"
+
+# ── Provider 4: Local Ollama (fully offline) ──────────────────────────────────
+# Always available as last resort. No internet required.
+[[providers]]
+name        = "local-ollama"
+priority    = 4
+base_url    = "http://localhost:11434"
+auth_style  = "none"
+health_path = "/api/tags"
+models = [
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+]
+
+[providers.model_map]
+"claude-sonnet-4-6" = "TBD"   # e.g. "qwen3-coder:14b-q4_K_M"
+"claude-haiku-4-5"  = "TBD"   # e.g. "llama3.2:3b"
