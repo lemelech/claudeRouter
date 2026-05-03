@@ -68,8 +68,10 @@ models = [
 "claude-sonnet-4-6" = "TBD"   # e.g. "hf.co/some-cloud-routed-model"
 "claude-haiku-4-5"  = "TBD"
 
-# ── Provider 4: Local Ollama (fully offline) ──────────────────────────────────
-# Always available as last resort. No internet required.
+# ── Provider 4: Local Ollama (fully offline, CPU) ────────────────────────────
+# Always available as last resort. No internet required. CPU-only.
+# Models are derived variants with num_ctx=65536 (Claude Code requirement).
+# Created via: ollama create qwen2.5-claude:7b -f <modelfile>
 [[providers]]
 name        = "local-ollama"
 priority    = 4
@@ -82,5 +84,7 @@ models = [
 ]
 
 [providers.model_map]
-"claude-sonnet-4-6" = "TBD"   # e.g. "qwen3-coder:14b-q4_K_M"
-"claude-haiku-4-5"  = "TBD"   # e.g. "llama3.2:3b"
+# qwen2.5-claude:7b  = qwen2.5:7b-instruct + num_ctx 65536  (best at coding/tools)
+# llama3.1-claude:8b = llama3.1:8b         + num_ctx 65536  (fallback)
+"claude-sonnet-4-6" = "qwen2.5-claude:7b"
+"claude-haiku-4-5"  = "llama3.1-claude:8b"
