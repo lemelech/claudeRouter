@@ -40,3 +40,81 @@ Streaming (SSE) is passed through transparently.
 - **Proxy server** — async Python, handles routing, fallback, health checks, and a control endpoint
 - **Launcher** (`cc`) — starts the proxy if not running, then launches `claude` with the right env vars
 - **Shell integration** — `use-*` switching functions, `claude-status`, auto-start on login (optional)
+
+## Setup
+
+### 1. Install
+
+```bash
+git clone <this-repo> ~/claudeRouter
+cd ~/claudeRouter
+uv tool install .          # puts `claudeRouter` on PATH (~/.local/bin)
+# or: pip install -e .     # fallback if you don't have uv
+```
+
+### 2. Configure
+
+```bash
+mkdir -p ~/.config/claudeRouter
+cp config.example.toml ~/.config/claudeRouter/config.toml
+```
+
+Edit `~/.config/claudeRouter/config.toml`:
+- Fill in the `model_map` entries for each Ollama provider (replace all `"TBD"` values with actual model names you have pulled, e.g. `"qwen3-coder:14b"`)
+- Ensure `ANTHROPIC_API_KEY` is set in your environment
+
+### 3. Set environment variables
+
+Add to `~/.profile` so both terminal shells and the VS Code GUI session inherit them:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export ANTHROPIC_BASE_URL="http://localhost:4891"
+```
+
+Log out and back in for the VS Code extension to pick these up.
+
+### 4. Start the proxy (systemd user service — recommended)
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp ~/claudeRouter/systemd/claudeRouter.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now claudeRouter
+```
+
+Verify: `curl http://localhost:4891/control/health` should return `ok`.
+
+Logs: `journalctl --user -u claudeRouter -f`
+
+### 5. Shell integration
+
+Add to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+source ~/claudeRouter/shell/claudeRouter.sh
+```
+
+Symlink the `cc` launcher onto your PATH (optional but convenient):
+
+```bash
+ln -sf ~/claudeRouter/bin/cc ~/.local/bin/cc
+```
+
+### 6. Use
+
+```bash
+cc                   # launches Claude Code via the proxy (also starts proxy if not running)
+claude-status        # show active provider + health of all providers
+use-anthropic        # force Anthropic for subsequent requests
+use-remote           # force Remote Ollama (Tailscale)
+use-cloud            # force Ollama cloud-routed model
+use-local            # force local Ollama
+use-auto             # back to automatic chain selection
+```
+
+## Known Limitations
+
+- **No mid-stream fallback.** Once the proxy starts streaming an SSE response to the client, it cannot switch providers. Provider switching only happens before the first byte is sent.
+- **Model names must be pre-configured.** Ollama providers will only receive requests for models listed in their `model_map` in the config. Requests for unlisted models fall through to the next provider.
+- **Context window.** Ollama models must be run with `num_ctx >= 65536` or Claude Code will behave erratically.
