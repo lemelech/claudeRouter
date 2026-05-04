@@ -131,11 +131,14 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
             async for chunk in upstream.content.iter_any():
                 await response.write(chunk)
         except (aiohttp.ClientError, ConnectionResetError) as e:
-            log.error("Stream error from %s: %s", provider.name, e)
+            log.debug("Stream closed from %s: %s", provider.name, e)
         finally:
             upstream.release()
 
-        await response.write_eof()
+        try:
+            await response.write_eof()
+        except (aiohttp.ClientError, ConnectionResetError):
+            pass  # client already closed after [DONE]
         return response
 
 
