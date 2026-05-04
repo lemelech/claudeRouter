@@ -14,7 +14,7 @@ class ProviderConfig:
     name: str
     priority: int
     base_url: str
-    auth_style: str           # "x-api-key" | "bearer" | "none"
+    auth_style: str           # "x-api-key" | "bearer" | "none" | "passthrough"
     models: list[str]
     model_map: dict[str, str] = field(default_factory=dict)
     extra_body: dict[str, Any] = field(default_factory=dict)
@@ -75,9 +75,9 @@ def load(path: Path | str | None = None) -> Config:
         seen_priorities.add(priority)
 
         auth_style = p_raw.get("auth_style", "none")
-        if auth_style not in ("x-api-key", "bearer", "none"):
+        if auth_style not in ("x-api-key", "bearer", "none", "passthrough"):
             raise ValueError(
-                f"Provider {name!r}: auth_style must be 'x-api-key', 'bearer', or 'none'."
+                f"Provider {name!r}: auth_style must be 'x-api-key', 'bearer', 'none', or 'passthrough'."
             )
 
         api_key: str | None = None

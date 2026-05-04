@@ -32,9 +32,9 @@ class Provider:
     @property
     def is_ready(self) -> bool:
         """False if this provider requires an API key that wasn't found in the environment."""
-        if self._cfg.auth_style != "none" and not self._cfg.api_key:
-            return False
-        return True
+        if self._cfg.auth_style in ("none", "passthrough"):
+            return True
+        return bool(self._cfg.api_key)
 
     def supports_model(self, requested: str) -> bool:
         return requested in self._cfg.models or requested in self._cfg.model_map
@@ -43,9 +43,11 @@ class Provider:
         return self._cfg.model_map.get(requested, requested)
 
     def apply_auth(self, headers: dict[str, str]) -> dict[str, str]:
+        style = self._cfg.auth_style
+        if style == "passthrough":
+            return dict(headers)   # forward Claude Code's own OAuth Bearer unchanged
         h = {k: v for k, v in headers.items()
              if k.lower() not in ("authorization", "x-api-key")}
-        style = self._cfg.auth_style
         key = self._cfg.api_key or ""
         if style == "x-api-key":
             h["x-api-key"] = key

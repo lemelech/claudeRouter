@@ -12,8 +12,8 @@ health_interval_secs = 30   # how often to probe each provider (seconds)
 name        = "anthropic"
 priority    = 1
 base_url    = "https://api.anthropic.com"
-auth_style  = "x-api-key"   # sends key as x-api-key header
-api_key_env = "ANTHROPIC_API_KEY"
+auth_style  = "passthrough"  # forward Claude Code's own OAuth Bearer token unchanged
+# api_key_env = "ANTHROPIC_API_KEY"  # uncomment if using a raw API key instead of oauth
 health_path = "/v1/models"
 # Models advertised as available from this provider.
 # The proxy uses this list to know whether to route a request here.
