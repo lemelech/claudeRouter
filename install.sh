@@ -31,7 +31,7 @@ if ! command -v uv &>/dev/null; then
     echo "Error: uv not found. Install it first: https://docs.astral.sh/uv/getting-started/installation/"
     exit 1
 fi
-uv tool install --force "$REPO_DIR"
+uv tool install --force --reinstall "$REPO_DIR"
 green "  ✓ claudeRouter installed to $BIN_DIR"
 
 # ── 2. Symlink bin scripts ────────────────────────────────────────────────────
