@@ -112,9 +112,10 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
             continue
 
         # Got a response — check for retryable status before streaming
-        if upstream.status == 429:
-            log.warning("Provider %s returned 429 — trying next", provider.name)
-            registry.record(provider.name, False, "429 rate-limited")
+        # 429: rate-limited; 529: Anthropic overloaded (also used by ollama-cloud if applicable)
+        if upstream.status in (429, 529):
+            log.warning("Provider %s returned %d — trying next", provider.name, upstream.status)
+            registry.record(provider.name, False, f"{upstream.status}")
             tried.add(provider.name)
             upstream.release()
             continue
