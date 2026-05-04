@@ -70,6 +70,7 @@ async def _on_startup(app: web.Application) -> None:
             sock_read=None,   # SSE streams — no read timeout
             total=None,
         ),
+        auto_decompress=False,  # pass compressed bytes through as-is; don't mangle Content-Encoding
     )
     app["client_session"] = session
 
