@@ -53,19 +53,22 @@ else
     green "  ✓ Config already exists: $CONFIG_DIR/config.toml"
 fi
 
-# ── 4. ~/.profile env vars ────────────────────────────────────────────────────
-step "Checking ~/.profile"
-if ! grep -q "ANTHROPIC_BASE_URL" "$PROFILE" 2>/dev/null; then
-    cat >> "$PROFILE" << 'EOF'
+# ── 4. env vars — write to both ~/.profile (login) and ~/.bashrc (interactive) ─
+step "Checking shell env vars"
+BASHRC="$HOME/.bashrc"
+for rc in "$PROFILE" "$BASHRC"; do
+    if ! grep -q "ANTHROPIC_BASE_URL" "$rc" 2>/dev/null; then
+        cat >> "$rc" << 'EOF'
 
 # claudeRouter proxy — redirect Claude Code to local provider router
 export ANTHROPIC_BASE_URL=http://localhost:4891
 EOF
-    green "  ✓ Added ANTHROPIC_BASE_URL to $PROFILE"
-    yellow "  ⚠  Log out and back in (or restart VS Code) for GUI sessions to pick this up"
-else
-    green "  ✓ ANTHROPIC_BASE_URL already in $PROFILE"
-fi
+        green "  ✓ Added ANTHROPIC_BASE_URL to $rc"
+    else
+        green "  ✓ ANTHROPIC_BASE_URL already in $rc"
+    fi
+done
+yellow "  ⚠  Open a new terminal (or run: export ANTHROPIC_BASE_URL=http://localhost:4891) to apply now"
 
 # ── 5. Systemd user service (Linux only) ─────────────────────────────────────
 if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl &>/dev/null; then
