@@ -30,6 +30,11 @@ class Provider:
         return self._cfg.extra_body
 
     @property
+    def native_thinking(self) -> bool:
+        """True when this provider generates valid Anthropic thinking signatures."""
+        return self._cfg.native_thinking
+
+    @property
     def is_ready(self) -> bool:
         """False if this provider requires an API key that wasn't found in the environment."""
         if self._cfg.auth_style in ("none", "passthrough"):

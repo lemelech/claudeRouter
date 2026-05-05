@@ -21,6 +21,7 @@ class ProviderConfig:
     api_key_env: str | None = None
     api_key: str | None = None
     health_path: str = "/api/tags"
+    native_thinking: bool = False  # True = provider signs thinking blocks (only Anthropic)
 
 
 @dataclass
@@ -100,6 +101,7 @@ def load(path: Path | str | None = None) -> Config:
             api_key_env=api_key_env,
             api_key=api_key,
             health_path=p_raw.get("health_path", "/api/tags"),
+            native_thinking=bool(p_raw.get("native_thinking", False)),
         ))
 
     providers.sort(key=lambda p: p.priority)

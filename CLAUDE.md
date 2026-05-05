@@ -15,7 +15,7 @@ The proxy exposes an Anthropic-compatible HTTP API on `localhost:4891`. It rewri
 - The `model` field in the request body (e.g. `claude-sonnet-4-6` → `qwen3.5` for Ollama)
 - The target base URL
 
-Streaming (SSE) must pass through transparently without buffering.
+Streaming (SSE) passes through transparently, except for thinking-block sterilization on non-native providers (see below).
 
 ### Provider Chain (priority order)
 
@@ -37,6 +37,18 @@ The proxy exposes an internal control API (e.g. `POST /control/use/{provider}`, 
 ### Fallback Logic
 
 On startup: probe each provider in chain order, select first healthy one. During a session: on rate-limit error (HTTP 429) or network failure from the active provider, silently retry the request against the next provider in chain.
+
+### Thinking Block Sterilization
+
+Anthropic cryptographically signs extended-thinking blocks; other providers generate unsigned/invalid signatures. If a non-Anthropic provider's thinking blocks enter Claude Code's history, every subsequent request to Anthropic fails with `400 Invalid signature in thinking block`.
+
+Two-layer protection:
+
+1. **Response sterilization** — SSE responses from providers without `native_thinking = true` have their thinking blocks converted to text (`<thinking>…</thinking>`) before reaching Claude Code. This prevents the problem from occurring in future turns.
+
+2. **Auto-retry on 400** — if Anthropic returns the signature error (e.g. history was already corrupted, or `/compact` is run on a broken session), the proxy sterilizes thinking blocks in the request messages and retries transparently. `/compact` + auto-retry is the recovery path: the compacted summary replaces all history with clean text, fully recovering the session.
+
+Set `native_thinking = true` on any provider whose thinking signatures Anthropic will accept (currently only Anthropic itself). All other providers default to `false`.
 
 ## Implementation Stack
 
@@ -61,6 +73,9 @@ Claude Code requires ≥ 64k token context window. Ollama models used as backend
 
 ### SSE mid-stream fallback limitation
 Once the proxy begins streaming SSE bytes to the client, provider switching is impossible without replaying the response. Fallback only occurs before the first byte is sent.
+
+### Thinking block signature validation
+Anthropic's thinking blocks carry a cryptographic `signature` field tied to their API. Only providers with `native_thinking = true` in config produce signatures Anthropic will accept. See "Thinking Block Sterilization" in Fallback Logic above.
 
 ## Similar Projects (for reference)
 
