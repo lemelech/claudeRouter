@@ -6,7 +6,8 @@
 #   2. Installs and enables the systemd user service (Linux only)
 #   3. Copies config.example.toml if no config exists yet
 #   4. Adds ANTHROPIC_BASE_URL to ~/.profile if missing
-#   5. Symlinks bin/cc and bin/ollama-ctx into ~/.local/bin
+#   5. Symlinks bin/cc, bin/ollama-ctx, bin/switch-mode into ~/.local/bin
+#   6. Installs /switch-mode slash command into ~/.claude/commands/
 #
 # Usage:
 #   cd ~/claudeRouter && bash install.sh
@@ -37,11 +38,20 @@ green "  ✓ claudeRouter installed to $BIN_DIR"
 # ── 2. Symlink bin scripts ────────────────────────────────────────────────────
 step "Linking bin scripts into $BIN_DIR"
 mkdir -p "$BIN_DIR"
-for script in cc ollama-ctx; do
+for script in cc ollama-ctx switch-mode; do
     ln -sf "$REPO_DIR/bin/$script" "$BIN_DIR/$script"
     chmod +x "$REPO_DIR/bin/$script"
     green "  ✓ $BIN_DIR/$script"
 done
+
+# ── 2b. Claude Code slash command ────────────────────────────────────────────
+CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
+mkdir -p "$CLAUDE_COMMANDS_DIR"
+cat > "$CLAUDE_COMMANDS_DIR/switch-mode.md" << 'EOF'
+Run the shell command `switch-mode $ARGUMENTS` and show the output.
+If no argument is given, run `switch-mode` interactively to display a menu of available providers from the running claudeRouter proxy, then switch to the selected one.
+EOF
+green "  ✓ Claude slash command: /switch-mode"
 
 # ── 3. Config file ────────────────────────────────────────────────────────────
 step "Checking config"
@@ -95,6 +105,6 @@ echo "  1. Edit $CONFIG_DIR/config.toml"
 echo "     - Fill in remote Ollama model names (replace TBD entries)"
 echo "  2. Log out + back in so VS Code picks up ANTHROPIC_BASE_URL"
 echo "  3. Run 'cc' instead of 'claude' in the terminal"
-echo "  4. Source shell functions: echo 'source $REPO_DIR/shell/claudeRouter.sh' >> ~/.bashrc"
-echo ""
-echo "Check status any time: claude-status  (after sourcing shell/claudeRouter.sh)"
+echo "  4. From any terminal: switch-mode            (interactive menu)"
+echo "     From within Claude: /switch-mode          (slash command)"
+echo "     Or directly:        switch-mode <name>    (e.g. switch-mode auto)"

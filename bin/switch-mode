@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# switch-mode — switch claudeRouter provider mode
+#
+# Usage:
+#   switch-mode              # interactive menu
+#   switch-mode <name>       # switch directly (e.g. switch-mode auto)
+#   switch-mode --status     # show current status only
+
+set -euo pipefail
+
+PROXY_URL="${CLAUDEROUTER_URL:-http://localhost:4891}"
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+# Fetch status once
+status=$(curl -fsS --max-time 3 "$PROXY_URL/control/status" 2>/dev/null) \
+    || die "claudeRouter not responding at $PROXY_URL — is it running?"
+
+current=$(echo "$status" | python3 -c "import json,sys; print(json.load(sys.stdin)['mode'])")
+
+# --status flag
+if [[ "${1:-}" == "--status" ]]; then
+    echo "$status" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f'mode: {d[\"mode\"]}')
+print()
+for p in d['providers']:
+    ok = '✓' if p['healthy'] else '✗'
+    t  = p.get('last_check') or 'never'
+    err = f'  ({p[\"last_error\"]})' if p.get('last_error') else ''
+    print(f'  {ok} [{p[\"priority\"]}] {p[\"name\"]:<20} {t}{err}')
+"
+    exit 0
+fi
+
+# Build mode list: auto + provider names from config
+mapfile -t providers < <(echo "$status" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('auto')
+for p in d['providers']:
+    print(p['name'])
+")
+
+# Direct argument
+if [[ $# -gt 0 ]]; then
+    mode="$1"
+else
+    # Interactive menu
+    echo "Current mode: $current"
+    echo ""
+    PS3="Select mode: "
+    select mode in "${providers[@]}"; do
+        [[ -n "$mode" ]] && break
+        echo "Invalid choice, try again."
+    done
+fi
+
+result=$(curl -fsS --max-time 5 -X POST "$PROXY_URL/control/use/$mode" 2>/dev/null) \
+    || die "Failed to switch mode — is '$mode' a valid provider name?"
+
+new_mode=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin)['mode'])")
+echo "mode: $new_mode"
