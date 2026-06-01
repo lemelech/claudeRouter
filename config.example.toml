@@ -24,6 +24,12 @@ models = [
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
 ]
+# model_prefixes: a request whose model field starts with any of these strings
+# is also accepted, even if it isn't in `models` above. For Anthropic this means
+# any future Claude release (claude-opus-4-8, claude-sonnet-5-0, …) routes here
+# automatically without a config edit. Leave empty for providers that need an
+# explicit model_map translation (e.g. Ollama).
+model_prefixes = ["claude-"]
 
 # ── Provider 2: Remote Ollama (Tailscale) ────────────────────────────────────
 # Capable home machine, requires Tailscale connectivity.

@@ -42,7 +42,9 @@ class Provider:
         return bool(self._cfg.api_key)
 
     def supports_model(self, requested: str) -> bool:
-        return requested in self._cfg.models or requested in self._cfg.model_map
+        if requested in self._cfg.models or requested in self._cfg.model_map:
+            return True
+        return any(requested.startswith(p) for p in self._cfg.model_prefixes)
 
     def translate_model(self, requested: str) -> str:
         return self._cfg.model_map.get(requested, requested)

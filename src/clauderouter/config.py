@@ -17,6 +17,7 @@ class ProviderConfig:
     auth_style: str           # "x-api-key" | "bearer" | "none" | "passthrough"
     models: list[str]
     model_map: dict[str, str] = field(default_factory=dict)
+    model_prefixes: list[str] = field(default_factory=list)
     extra_body: dict[str, Any] = field(default_factory=dict)
     api_key_env: str | None = None
     api_key: str | None = None
@@ -97,6 +98,7 @@ def load(path: Path | str | None = None) -> Config:
             auth_style=auth_style,
             models=list(p_raw.get("models", [])),
             model_map=dict(p_raw.get("model_map", {})),
+            model_prefixes=list(p_raw.get("model_prefixes", [])),
             extra_body=dict(p_raw.get("extra_body", {})),
             api_key_env=api_key_env,
             api_key=api_key,

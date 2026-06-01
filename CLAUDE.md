@@ -17,6 +17,10 @@ The proxy exposes an Anthropic-compatible HTTP API on `localhost:4891`. It rewri
 
 Streaming (SSE) passes through transparently, except for thinking-block sterilization on non-native providers (see below).
 
+### Model matching
+
+A provider accepts a request if the requested `model` name appears in its `models` list, in its `model_map` keys, OR starts with any string in its `model_prefixes` list. Anthropic is configured with `model_prefixes = ["claude-"]` so every future Claude release (e.g. `claude-opus-4-8`, `claude-sonnet-5-0`) routes to it automatically without a config edit. Ollama providers leave `model_prefixes` empty because they require an explicit `model_map` entry to translate the Claude name into a real Ollama model name.
+
 ### Provider Chain (priority order)
 
 1. **Anthropic API** — `api.anthropic.com`, requires internet + API key
