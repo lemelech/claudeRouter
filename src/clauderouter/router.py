@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -248,9 +249,11 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
             resp_headers = {k: v for k, v in upstream.headers.items()
                             if k.lower() not in ("transfer-encoding", "content-length")}
             upstream.release()
+            if error_bytes.startswith(b"\x1f\x8b"):
+                error_bytes = gzip.decompress(error_bytes)
             try:
                 error_body = json.loads(error_bytes)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 error_body = {}
             if _is_thinking_signature_error(error_body):
                 log.warning("Thinking signature error — sterilizing history and retrying")
