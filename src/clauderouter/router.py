@@ -6,6 +6,7 @@ import asyncio
 import gzip
 import json
 import logging
+import zlib
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -249,10 +250,16 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
             resp_headers = {k: v for k, v in upstream.headers.items()
                             if k.lower() not in ("transfer-encoding", "content-length")}
             upstream.release()
+            # Decompress a copy for inspection only; error_bytes stays as-is so the
+            # forwarded body matches the pass-through Content-Encoding header.
+            inspect_bytes = error_bytes
             if error_bytes.startswith(b"\x1f\x8b"):
-                error_bytes = gzip.decompress(error_bytes)
+                try:
+                    inspect_bytes = gzip.decompress(error_bytes)
+                except (gzip.BadGzipFile, zlib.error, EOFError):
+                    inspect_bytes = b""
             try:
-                error_body = json.loads(error_bytes)
+                error_body = json.loads(inspect_bytes)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 error_body = {}
             if _is_thinking_signature_error(error_body):
