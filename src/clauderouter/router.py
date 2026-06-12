@@ -222,6 +222,32 @@ def _update_usage_from_sse_event(raw: bytes, usage: dict) -> None:
         pass
 
 
+def _stream_decompressor(content_encoding: str):
+    """Decompressor for the usage-observation side-channel only.
+
+    Forwarded bytes are never altered; this just lets us read token counts out of
+    a compressed body. Returns a zlib decompressobj for gzip/deflate, or None for
+    identity / unsupported encodings (in which case observed bytes are used as-is).
+    """
+    enc = (content_encoding or "").lower().strip()
+    if enc in ("gzip", "x-gzip"):
+        return zlib.decompressobj(16 + zlib.MAX_WBITS)
+    if enc == "deflate":
+        return zlib.decompressobj()
+    return None
+
+
+def _decompress_all(body: bytes, content_encoding: str) -> bytes:
+    """Best-effort whole-body decompress for observation. Never raises."""
+    dec = _stream_decompressor(content_encoding)
+    if dec is None:
+        return body
+    try:
+        return dec.decompress(body) + dec.flush()
+    except Exception:
+        return b""
+
+
 def _extract_usage_from_json(body: bytes, usage: dict) -> None:
     """Best-effort: pull `usage` out of a non-streaming Messages response body.
 
@@ -239,7 +265,7 @@ def _extract_usage_from_json(body: bytes, usage: dict) -> None:
 
 
 async def _stream(upstream: aiohttp.ClientResponse, response: web.StreamResponse,
-                  sterilize: bool, is_sse: bool) -> tuple[int, dict]:
+                  sterilize: bool, is_sse: bool, content_encoding: str = "") -> tuple[int, dict]:
     usage: dict = {}
     response_bytes = 0
 
@@ -249,15 +275,25 @@ async def _stream(upstream: aiohttp.ClientResponse, response: web.StreamResponse
             await response.write(chunk)
             response_bytes += len(chunk)
             body.extend(chunk)
-        _extract_usage_from_json(bytes(body), usage)
+        _extract_usage_from_json(_decompress_all(bytes(body), content_encoding), usage)
         return response_bytes, usage
 
     if not sterilize:
+        # Zero-copy passthrough: forward each chunk UNCHANGED. Observe usage on a
+        # decompressed copy (responses are commonly gzip'd; auto_decompress is off).
+        dec = _stream_decompressor(content_encoding)
         obs_buf = b""
+        obs_ok = True
         async for chunk in upstream.content.iter_any():
             await response.write(chunk)
             response_bytes += len(chunk)
-            obs_buf += chunk
+            if not obs_ok:
+                continue
+            try:
+                obs_buf += dec.decompress(chunk) if dec is not None else chunk
+            except Exception:
+                obs_ok, obs_buf = False, b""  # stop observing; never touch forwarding
+                continue
             while b"\n\n" in obs_buf:
                 raw_event, obs_buf = obs_buf.split(b"\n\n", 1)
                 _update_usage_from_sse_event(raw_event, usage)
@@ -367,6 +403,14 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
         headers = provider.apply_auth(dict(request.headers))
         headers.pop("Host", None)
         headers.pop("host", None)
+        # Usage is read by decompressing the response in a side-channel. Pin native
+        # providers to gzip so the stdlib can always decode it (avoids needing
+        # brotli/zstd deps). Non-native providers are left untouched — their SSE is
+        # sterilized, which assumes an uncompressed stream.
+        if provider.native_thinking:
+            for k in [h for h in headers if h.lower() == "accept-encoding"]:
+                headers.pop(k)
+            headers["Accept-Encoding"] = "gzip"
         headers["Content-Length"] = str(len(upstream_body))
 
         log.info("→ %s %s via %s (model: %s → %s)",
@@ -442,8 +486,10 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
 
         response_bytes = 0
         usage: dict = {}
+        content_encoding = upstream.headers.get("Content-Encoding", "")
         try:
-            response_bytes, usage = await _stream(upstream, response, sterilize, is_sse)
+            response_bytes, usage = await _stream(upstream, response, sterilize, is_sse,
+                                                  content_encoding)
         except (aiohttp.ClientError, ConnectionResetError) as e:
             log.debug("Stream closed from %s: %s", provider.name, e)
         finally:

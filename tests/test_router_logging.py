@@ -199,6 +199,56 @@ async def test_sse_native_thinking_zero_copy_byte_identical_and_usage(tmp_path) 
     assert entry.usage["cache_creation_input_tokens"] == 0
 
 
+# ── Gzip'd SSE from a native provider: usage still extracted, bytes intact ──
+
+@pytest.mark.asyncio
+async def test_sse_gzip_native_usage_extracted_and_bytes_intact(tmp_path) -> None:
+    import gzip as _gzip
+
+    gzipped = _gzip.compress(_SSE_NATIVE_BODY)
+
+    async def upstream_handler(request: web.Request) -> web.StreamResponse:
+        # Forwarded compressed, like api.anthropic.com (server has auto_decompress off).
+        resp = web.StreamResponse(status=200, headers={
+            "Content-Type": "text/event-stream",
+            "Content-Encoding": "gzip",
+        })
+        await resp.prepare(request)
+        await resp.write(gzipped)
+        await resp.write_eof()
+        return resp
+
+    upstream = await _start_upstream(upstream_handler)
+    traffic_log = _FakeTrafficLog()
+    try:
+        app, client = await _start_proxy(
+            tmp_path,
+            [_provider("anthropic", str(upstream.make_url("")), native_thinking=True)],
+            traffic_log=traffic_log,
+        )
+        try:
+            resp = await client.post(
+                "/v1/messages",
+                data=json.dumps({"model": "claude-sonnet-4-6", "stream": True, "messages": []}),
+            )
+            assert resp.status == 200
+            # Test client auto-decompresses; the decoded stream must be intact.
+            assert await resp.read() == _SSE_NATIVE_BODY
+        finally:
+            await client.close()
+    finally:
+        await upstream.close()
+
+    assert len(traffic_log.entries) == 1
+    entry = traffic_log.entries[0]
+    assert entry.status == 200
+    assert entry.response_bytes == len(gzipped)  # bytes forwarded == compressed length
+    assert entry.usage is not None, "usage must be extracted from a gzip'd stream"
+    assert entry.usage["input_tokens"] == 1200
+    assert entry.usage["output_tokens"] == 12
+    assert entry.usage["cache_read_input_tokens"] == 800
+
+
 # ── Successful SSE response from a non-native-thinking provider (sterilize) ─
 
 _SSE_THINKING_BODY = (
