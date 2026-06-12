@@ -30,14 +30,45 @@ models = [
 # automatically without a config edit. Leave empty for providers that need an
 # explicit model_map translation (e.g. Ollama).
 model_prefixes = ["claude-"]
+# Only Anthropic produces thinking-block signatures Anthropic will accept.
+native_thinking = true
 
-# ── Provider 2: Remote Ollama (Tailscale) ────────────────────────────────────
+# ── Provider 2: OpenRouter ───────────────────────────────────────────────────
+# Anthropic-compatible /v1/messages endpoint — no protocol translation needed.
+# Cheap fallback tier: maps Claude model names to open-weights models that
+# benchmark near Sonnet/Opus on agentic coding at a fraction of the price.
+# Set OPENROUTER_API_KEY in your environment. Browse models/prices at
+# https://openrouter.ai/models (or GET https://openrouter.ai/api/v1/models).
+[[providers]]
+name        = "openrouter"
+priority    = 2
+base_url    = "https://openrouter.ai/api"   # Claude Code's /v1/messages path is appended
+auth_style  = "bearer"
+api_key_env = "OPENROUTER_API_KEY"
+health_path = "/v1/models"                  # public endpoint, no auth required
+models = [
+    "claude-fable-5",
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+]
+
+# Map Claude model names to OpenRouter slugs (vendor/model format).
+# To route to real Claude models instead, use e.g. "anthropic/claude-sonnet-4.6"
+# (note dots, not dashes, in OpenRouter's Anthropic slugs).
+[providers.model_map]
+"claude-fable-5"    = "deepseek/deepseek-v4-pro"
+"claude-opus-4-7"   = "deepseek/deepseek-v4-pro"
+"claude-sonnet-4-6" = "z-ai/glm-5"
+"claude-haiku-4-5"  = "deepseek/deepseek-v4-flash"
+
+# ── Provider 3: Remote Ollama (Tailscale) ────────────────────────────────────
 # Capable home machine, requires Tailscale connectivity.
 # Ollama ≥ v0.14.0 speaks the Anthropic Messages API natively.
 # The proxy only rewrites the model name + auth header.
 [[providers]]
 name        = "remote-ollama"
-priority    = 2
+priority    = 3
 base_url    = "http://REMOTE_OLLAMA_IP:11434"
 auth_style  = "none"        # Ollama needs no auth by default
 health_path = "/api/tags"
@@ -64,12 +95,12 @@ models = [
 [providers.extra_body]
 options = {num_ctx = 65536}
 
-# ── Provider 3: Ollama (cloud-routed model) ──────────────────────────────────
+# ── Provider 4: Ollama (cloud-routed model) ──────────────────────────────────
 # Local Ollama instance using a model that routes through a cloud provider.
 # Requires internet but no Anthropic credits.
 [[providers]]
 name        = "ollama-cloud"
-priority    = 3
+priority    = 4
 base_url    = "http://localhost:11434"
 auth_style  = "none"
 health_path = "/api/tags"
@@ -82,13 +113,13 @@ models = [
 "claude-sonnet-4-6" = "TBD"   # e.g. "hf.co/some-cloud-routed-model"
 "claude-haiku-4-5"  = "TBD"
 
-# ── Provider 4: Local Ollama (fully offline, CPU) ────────────────────────────
+# ── Provider 5: Local Ollama (fully offline, CPU) ────────────────────────────
 # Always available as last resort. No internet required. CPU-only.
 # Models are derived variants with num_ctx=65536 (Claude Code requirement).
 # Created via: ollama create qwen2.5-claude:7b -f <modelfile>
 [[providers]]
 name        = "local-ollama"
-priority    = 4
+priority    = 5
 base_url    = "http://localhost:11434"
 auth_style  = "none"
 health_path = "/api/tags"

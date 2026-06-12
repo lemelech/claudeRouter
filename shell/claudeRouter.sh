@@ -5,6 +5,7 @@
 _CLAUDE_ROUTER_URL="http://localhost:4891"
 
 use-anthropic()  { curl -fsS -X POST "${_CLAUDE_ROUTER_URL}/control/use/anthropic"     | _cr_print_mode; }
+use-openrouter() { curl -fsS -X POST "${_CLAUDE_ROUTER_URL}/control/use/openrouter"    | _cr_print_mode; }
 use-remote()     { curl -fsS -X POST "${_CLAUDE_ROUTER_URL}/control/use/remote-ollama" | _cr_print_mode; }
 use-cloud()      { curl -fsS -X POST "${_CLAUDE_ROUTER_URL}/control/use/ollama-cloud"  | _cr_print_mode; }
 use-local()      { curl -fsS -X POST "${_CLAUDE_ROUTER_URL}/control/use/local-ollama"  | _cr_print_mode; }

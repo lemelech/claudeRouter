@@ -32,8 +32,11 @@ if ! command -v uv &>/dev/null; then
     echo "Error: uv not found. Install it first: https://docs.astral.sh/uv/getting-started/installation/"
     exit 1
 fi
-uv tool install --force --reinstall "$REPO_DIR"
-green "  ✓ claudeRouter installed to $BIN_DIR"
+# --editable: the installed tool links back to $REPO_DIR/src, so future
+# `git pull`s take effect on the next `systemctl --user restart claudeRouter`
+# without needing to re-run this install step.
+uv tool install --force --reinstall --editable "$REPO_DIR"
+green "  ✓ claudeRouter installed to $BIN_DIR (editable — future code updates apply on service restart)"
 
 # ── 2. Symlink bin scripts ────────────────────────────────────────────────────
 step "Linking bin scripts into $BIN_DIR"

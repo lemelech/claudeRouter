@@ -15,9 +15,10 @@ Run a lightweight local HTTP proxy that Claude Code always talks to via `ANTHROP
 Priority order for auto-detection and fallback:
 
 1. **Anthropic API** — full Claude models, requires internet + API credits
-2. **Remote Ollama** (Tailscale `REMOTE_OLLAMA_IP:11434`) — capable home machine, requires Tailscale connectivity
-3. **Ollama cloud models** (local Ollama, cloud-routed model) — requires internet, no Anthropic credits needed
-4. **Local Ollama** (`localhost:11434`) — fully offline, always last resort
+2. **OpenRouter** (`openrouter.ai/api`) — Anthropic-compatible endpoint; open-weights models that benchmark near Sonnet/Opus at a fraction of the price (DeepSeek V4, GLM-5, …)
+3. **Remote Ollama** (Tailscale `REMOTE_OLLAMA_IP:11434`) — capable home machine, requires Tailscale connectivity
+4. **Ollama cloud models** (local Ollama, cloud-routed model) — requires internet, no Anthropic credits needed
+5. **Local Ollama** (`localhost:11434`) — fully offline, always last resort
 
 ## Switching
 
@@ -69,6 +70,7 @@ Add to `~/.profile` so both terminal shells and the VS Code GUI session inherit 
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENROUTER_API_KEY="sk-or-..."   # if using the OpenRouter provider
 export ANTHROPIC_BASE_URL="http://localhost:4891"
 ```
 
@@ -107,6 +109,7 @@ ln -sf ~/claudeRouter/bin/cc ~/.local/bin/cc
 cc                   # launches Claude Code via the proxy (also starts proxy if not running)
 claude-status        # show active provider + health of all providers
 use-anthropic        # force Anthropic for subsequent requests
+use-openrouter       # force OpenRouter
 use-remote           # force Remote Ollama (Tailscale)
 use-cloud            # force Ollama cloud-routed model
 use-local            # force local Ollama

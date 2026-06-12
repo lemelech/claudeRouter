@@ -6,6 +6,7 @@ import asyncio
 import gzip
 import json
 import logging
+import re
 import zlib
 from typing import TYPE_CHECKING
 
@@ -132,6 +133,26 @@ def _is_thinking_signature_error(body: dict) -> bool:
     )
 
 
+# e.g. Ollama: "max_tokens (64000) exceeds model's maximum output tokens (32768) for model ..."
+_MAX_OUTPUT_TOKENS_RE = re.compile(r"maximum output tokens \((\d+)\)")
+
+
+def _max_output_tokens_from_error(body: dict) -> int | None:
+    """Extract the model's output-token limit from a 400 error body, if present."""
+    message = body.get("error", {}).get("message", "")
+    m = _MAX_OUTPUT_TOKENS_RE.search(message)
+    return int(m.group(1)) if m else None
+
+
+def _clamp_max_tokens(body: dict, limit: int) -> dict:
+    """Clamp max_tokens (and any thinking budget, which must stay below it)."""
+    clamped = {**body, "max_tokens": limit}
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("budget_tokens", 0) >= limit:
+        clamped["thinking"] = {**thinking, "budget_tokens": limit - 1}
+    return clamped
+
+
 def _sterilize_thinking_in_messages(body: dict) -> dict:
     """Convert thinking blocks in message history to text blocks.
 
@@ -191,6 +212,7 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
     requested_model: str = body.get("model", "")
     tried: set[str] = set()
     signature_sterilized = False  # only sterilize once per request
+    max_tokens_clamped = False    # only clamp max_tokens once per request
 
     while True:
         provider = pick_provider(requested_model, providers, registry, tried)
@@ -245,7 +267,7 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
             upstream.release()
             continue
 
-        if upstream.status == 400 and provider.native_thinking and not signature_sterilized:
+        if upstream.status == 400:
             error_bytes = await upstream.read()
             resp_headers = {k: v for k, v in upstream.headers.items()
                             if k.lower() not in ("transfer-encoding", "content-length")}
@@ -262,10 +284,19 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
                 error_body = json.loads(inspect_bytes)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 error_body = {}
-            if _is_thinking_signature_error(error_body):
+            if (provider.native_thinking and not signature_sterilized
+                    and _is_thinking_signature_error(error_body)):
                 log.warning("Thinking signature error — sterilizing history and retrying")
                 body = _sterilize_thinking_in_messages(body)
                 signature_sterilized = True
+                continue  # retry same provider (not added to tried)
+            limit = _max_output_tokens_from_error(error_body)
+            if (limit is not None and not max_tokens_clamped
+                    and body.get("max_tokens", 0) > limit):
+                log.warning("Provider %s caps output at %d tokens — clamping and retrying",
+                            provider.name, limit)
+                body = _clamp_max_tokens(body, limit)
+                max_tokens_clamped = True
                 continue  # retry same provider (not added to tried)
             return web.Response(status=400, headers=resp_headers, body=error_bytes)
 

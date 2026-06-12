@@ -24,15 +24,16 @@ A provider accepts a request if the requested `model` name appears in its `model
 ### Provider Chain (priority order)
 
 1. **Anthropic API** — `api.anthropic.com`, requires internet + API key
-2. **Remote Ollama** — Tailscale `REMOTE_OLLAMA_IP:11434`, requires Tailscale connectivity
-3. **Ollama cloud models** — local Ollama at `localhost:11434` using a cloud-routed model
-4. **Local Ollama** — `localhost:11434` with a local model, fully offline fallback
+2. **OpenRouter** — `openrouter.ai/api`, Anthropic-compatible `/v1/messages` endpoint (no protocol translation); `auth_style = "bearer"` with `OPENROUTER_API_KEY`; `model_map` translates Claude model names to OpenRouter slugs (`vendor/model` format, e.g. `deepseek/deepseek-v4-pro`)
+3. **Remote Ollama** — Tailscale `REMOTE_OLLAMA_IP:11434`, requires Tailscale connectivity
+4. **Ollama cloud models** — local Ollama at `localhost:11434` using a cloud-routed model
+5. **Local Ollama** — `localhost:11434` with a local model, fully offline fallback
 
 ### Components
 
 - **Proxy server** (`proxy.py` or similar) — async Python; handles routing, fallback on rate-limit/network error, health checks, and a control endpoint for on-demand switching
 - **Launcher** (`cc`) — shell script or small binary; starts the proxy if not already running, then launches `claude` with `ANTHROPIC_BASE_URL=http://localhost:4891`
-- **Shell functions** — `use-anthropic`, `use-remote`, `use-local`, `use-auto` hit the proxy control endpoint; `claude-status` shows active provider and last health check times
+- **Shell functions** — `use-anthropic`, `use-openrouter`, `use-remote`, `use-local`, `use-auto` hit the proxy control endpoint; `claude-status` shows active provider and last health check times
 
 ### Control Endpoint
 
