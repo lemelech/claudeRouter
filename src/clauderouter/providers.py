@@ -35,11 +35,23 @@ class Provider:
         return self._cfg.native_thinking
 
     @property
+    def auth_style(self) -> str:
+        return self._cfg.auth_style
+
+    @property
     def is_ready(self) -> bool:
         """False if this provider requires an API key that wasn't found in the environment."""
         if self._cfg.auth_style in ("none", "passthrough"):
             return True
         return bool(self._cfg.api_key)
+
+    def probe_model(self) -> str | None:
+        """A requested model name to use for a deep health probe (first configured)."""
+        if self._cfg.models:
+            return self._cfg.models[0]
+        if self._cfg.model_map:
+            return next(iter(self._cfg.model_map))
+        return None
 
     def supports_model(self, requested: str) -> bool:
         if requested in self._cfg.models or requested in self._cfg.model_map:

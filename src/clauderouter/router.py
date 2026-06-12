@@ -40,6 +40,26 @@ def set_mode(mode: str, valid_names: set[str]) -> None:
     _mode = mode
 
 
+def _skip_reasons(model: str, providers: list[Provider], registry: HealthRegistry,
+                  tried: set[str]) -> dict | None:
+    """Why each NOT-selectable provider was passed over, for this model right now.
+
+    Eligible providers are omitted. Returns None if every provider is eligible.
+    Mirrors the gate in pick_provider (order: tried → ready → model → healthy).
+    """
+    reasons: dict[str, str] = {}
+    for p in providers:
+        if p.name in tried:
+            reasons[p.name] = "already tried (failed earlier this request)"
+        elif not p.is_ready:
+            reasons[p.name] = "not ready (no api key)"
+        elif not p.supports_model(model):
+            reasons[p.name] = "model not supported"
+        elif not registry.is_healthy(p.name):
+            reasons[p.name] = "unhealthy (last probe failed)"
+    return reasons or None
+
+
 def pick_provider(model: str, providers: list[Provider],
                   registry: HealthRegistry,
                   tried: set[str] | None = None) -> Provider | None:
@@ -370,6 +390,7 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
                 error_summary=error_summary,
                 usage=usage or None,
                 duration_ms=(time.monotonic() - start) * 1000,
+                skipped=_skip_reasons(requested_model, providers, registry, tried),
             ))
         except Exception:
             log.debug("traffic log emit failed", exc_info=True)

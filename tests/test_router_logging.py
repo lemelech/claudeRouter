@@ -311,6 +311,39 @@ async def test_sse_sterilization_unchanged_and_usage_extracted(tmp_path) -> None
     assert entry.usage["output_tokens"] == 7
 
 
+# ── Skip reasons on a 503 (no selectable provider) ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_503_records_per_provider_skip_reasons(tmp_path) -> None:
+    # A bearer provider with no API key is "healthy" (public probe) but NOT ready,
+    # plus a healthy provider that doesn't support the requested model.
+    not_ready = ProviderConfig(
+        name="openrouter", priority=1, base_url="http://127.0.0.1:1",
+        auth_style="bearer", models=["claude-sonnet-4-6"], api_key=None)
+    wrong_model = ProviderConfig(
+        name="ollama", priority=2, base_url="http://127.0.0.1:1",
+        auth_style="none", models=["some-other-model"])
+
+    traffic_log = _FakeTrafficLog()
+    app, client = await _start_proxy(tmp_path, [not_ready, wrong_model], traffic_log=traffic_log)
+    try:
+        resp = await client.post(
+            "/v1/messages",
+            data=json.dumps({"model": "claude-sonnet-4-6", "messages": []}),
+        )
+        assert resp.status == 503
+    finally:
+        await client.close()
+
+    assert len(traffic_log.entries) == 1
+    entry = traffic_log.entries[0]
+    assert entry.provider is None
+    assert entry.skipped == {
+        "openrouter": "not ready (no api key)",
+        "ollama": "model not supported",
+    }
+
+
 # ── 400 error response ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

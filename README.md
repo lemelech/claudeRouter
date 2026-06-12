@@ -33,10 +33,18 @@ Open **`http://localhost:4891/dashboard`** in a browser (pin the tab) for a live
 
 It shows:
 - **Current mode** and, in `auto` mode, the **effective provider** the chain would pick right now
-- **Provider health** — priority, healthy/unhealthy, last check time, last error (the effective provider's row is highlighted)
+- **Provider health** — priority, healthy/unhealthy, **ready** (a reachable provider with no API key shows a `no key` badge instead of looking usable), **deep probe** result, last check, last error (effective provider's row highlighted), and a **Re-test** button
 - **Traffic timeline** — request counts bucketed by minute, colored per provider
 - **Usage breakdown** — per provider: request count, total input/output tokens, average latency
-- **Recent requests** — one row each: time, session, provider, model (`requested → translated` when they differ), status, request/response sizes, tokens, duration, and the fallback chain when a request was retried
+- **Recent requests** — one row each: time, session, provider, model (`requested → translated` when they differ), status, request/response sizes, tokens, duration, the fallback chain when retried, and a `skipped` annotation showing **why** providers were passed over (e.g. on a 503: `openrouter: not ready (no api key)`)
+
+### Health: reachability vs. real
+
+Two layers:
+- **Cheap reachability probe** (every `health_interval_secs`) — a `GET` to the provider's health path. This is the `healthy` column. It only confirms the host answers; it does *not* verify auth or that completions work.
+- **Deep ("real") probe** — sends a minimal `"hi"` completion (`max_tokens: 8`, no agentic prompt) and confirms a `200`, exercising auth + model translation + the `/v1/messages` path. Runs **once at startup** and on-demand via the dashboard **Re-test** button (`POST /control/probe`). It costs a few tokens on paid providers, so it does *not* run on the reachability loop. **Passthrough** providers (Anthropic) show `n/a` — the proxy holds no key of its own to probe with, since it forwards Claude Code's token from live requests.
+
+> A provider can be `healthy` (reachable) but `ready: false` (no API key) — it will silently never be selected and a forced request returns 503. The `ready` badge and the 503's `skipped` reasons make that visible.
 
 ### Sessions
 
@@ -61,11 +69,14 @@ Under `[server]` in `~/.config/claudeRouter/config.toml` (see `config.example.to
 | `traffic_log_path` | `~/.local/state/claudeRouter/requests.jsonl` | JSONL persistence file. Set to `""` to disable file writes (ring buffer / dashboard still work). |
 | `traffic_log_ring_size` | `500` | Recent requests kept in memory for the dashboard. |
 | `traffic_log_queue_size` | `1000` | Max entries buffered before new ones are dropped (under a burst). |
+| `deep_probe_on_startup` | `true` | Run the real "hi" probe once at startup. Set `false` to only probe on-demand via the Re-test button. |
 
 ### Endpoints
 
 - `GET /dashboard` — the HTML page above
+- `GET /control/status` — per-provider `{ healthy, ready, auth_style, deep: {...}, ... }`
 - `GET /control/traffic` — JSON the page polls: `{ "mode", "effective_provider", "entries": [...] }`, entries most-recent-first. Scrape it directly if you want your own tooling.
+- `POST /control/probe` (or `/control/probe/{name}`) — run the deep probe now; returns updated status.
 
 ## How It Works
 

@@ -32,6 +32,7 @@ class ServerConfig:
     traffic_log_path: str = "~/.local/state/claudeRouter/requests.jsonl"
     traffic_log_ring_size: int = 500
     traffic_log_queue_size: int = 1000
+    deep_probe_on_startup: bool = True
 
 
 @dataclass

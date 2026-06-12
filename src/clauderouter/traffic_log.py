@@ -39,6 +39,8 @@ class LogEntry:
     usage: dict | None               # {"input_tokens", "output_tokens",
                                       #  "cache_read_input_tokens", "cache_creation_input_tokens"}
     duration_ms: float
+    skipped: dict | None = None      # provider name -> reason it was passed over
+                                      # (e.g. "not ready (no api key)", "unhealthy")
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +58,7 @@ class LogEntry:
             "error_summary": self.error_summary,
             "usage": self.usage,
             "duration_ms": self.duration_ms,
+            "skipped": self.skipped,
         }
 
 

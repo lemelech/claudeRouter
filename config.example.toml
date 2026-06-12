@@ -13,6 +13,14 @@ traffic_log_path = "~/.local/state/claudeRouter/requests.jsonl"
 traffic_log_ring_size = 500     # number of recent requests kept in memory for the dashboard
 traffic_log_queue_size = 1000   # max entries buffered before new ones are dropped
 
+# Deep ("real") health probe: sends a minimal "hi" completion once at startup to
+# verify each credentialed provider actually responds (auth + model + messages
+# path), beyond the cheap reachability probe. Costs a few tokens per provider on
+# paid backends. Set false to only probe on-demand via POST /control/probe (the
+# dashboard "Re-test" button). Passthrough providers (Anthropic) are skipped —
+# the proxy holds no key of its own to probe with.
+deep_probe_on_startup = true
+
 # ── Provider 1: Anthropic API ────────────────────────────────────────────────
 # Full Claude models. Requires internet + API key.
 # Set ANTHROPIC_API_KEY in your environment (or ~/.profile).

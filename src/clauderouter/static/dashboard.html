@@ -128,6 +128,13 @@
 
   .ok { color: var(--green); }
   .err { color: var(--red); }
+  .muted { color: #888; }
+  #reprobe-btn {
+    font-size: 0.7em; font-weight: normal; vertical-align: middle;
+    margin-left: 0.6em; padding: 0.15em 0.6em; cursor: pointer;
+  }
+  #reprobe-btn:disabled { opacity: 0.5; cursor: default; }
+  #reprobe-status { font-size: 0.7em; color: #888; font-weight: normal; }
 
   .dot {
     display: inline-block;
@@ -199,13 +206,18 @@
 
 <main>
   <section class="panel">
-    <h2>Provider health</h2>
+    <h2>Provider health
+      <button id="reprobe-btn" type="button" title="Send a real 'hi' to each credentialed provider and verify it responds">Re-test</button>
+      <span id="reprobe-status"></span>
+    </h2>
     <table id="health-table">
       <thead>
         <tr>
           <th>Name</th>
           <th>Priority</th>
           <th>Healthy</th>
+          <th>Ready</th>
+          <th>Deep probe</th>
           <th>Last check</th>
           <th>Last error</th>
         </tr>
@@ -366,11 +378,33 @@
       var lastCheck = p.last_check ? fmtTime(p.last_check) : "—";
       var lastError = p.last_error ? escapeHtml(p.last_error) : "—";
 
+      // Ready: reachable but unusable (e.g. missing API key) shows a clear badge.
+      var readyCell = (p.ready === false)
+        ? "<span class=\"err\" title=\"reachable but unusable — missing API key (" +
+            escapeHtml(p.auth_style || "") + " auth)\">no key</span>"
+        : "<span class=\"ok\">yes</span>";
+
+      // Deep probe: real "say hi" result.
+      var deep = p.deep || {};
+      var deepCell;
+      if (deep.status === "ok") {
+        var lat = deep.latency_ms != null ? " (" + Math.round(deep.latency_ms) + "ms)" : "";
+        deepCell = "<span class=\"ok\" title=\"verified at " + escapeHtml(deep.checked_at || "") + "\">ok" + lat + "</span>";
+      } else if (deep.status === "fail") {
+        deepCell = "<span class=\"err\" title=\"" + escapeHtml(deep.error || "failed") + "\">fail</span>";
+      } else if (deep.status === "n/a") {
+        deepCell = "<span class=\"muted\" title=\"" + escapeHtml(deep.error || "not applicable") + "\">n/a</span>";
+      } else {
+        deepCell = "<span class=\"muted\">—</span>";
+      }
+
       tr.innerHTML =
         "<td>" + escapeHtml(p.name) + "</td>" +
         "<td>" + escapeHtml(p.priority) + "</td>" +
         "<td><span class=\"dot " + (healthy ? "ok" : "err") + "\"></span>" +
           (healthy ? "<span class=\"ok\">yes</span>" : "<span class=\"err\">no</span>") + "</td>" +
+        "<td>" + readyCell + "</td>" +
+        "<td>" + deepCell + "</td>" +
         "<td>" + lastCheck + "</td>" +
         "<td class=\"err\">" + lastError + "</td>";
       tbody.appendChild(tr);
@@ -570,6 +604,13 @@
         var chain = e.tried.concat([e.provider || "none"]).join(" → ");
         triedNote = " <span class=\"tried-note\" title=\"fallback: " + escapeHtml(chain) + "\">⚠︎</span>";
       }
+      // Why providers were passed over (esp. useful on 503 "no provider" rows).
+      if (e.skipped && Object.keys(e.skipped).length > 0) {
+        var why = Object.keys(e.skipped).map(function (n) {
+          return n + ": " + e.skipped[n];
+        }).join("\n");
+        triedNote += " <span class=\"tried-note\" title=\"skipped —\n" + escapeHtml(why) + "\">skipped</span>";
+      }
 
       tr.innerHTML =
         "<td>" + fmtTime(e.timestamp) + "</td>" +
@@ -618,6 +659,26 @@
 
       setConnState(true);
       render();
+    });
+  }
+
+  // ── Re-test button: run a real deep probe on demand ──────────────────
+  var reprobeBtn = document.getElementById("reprobe-btn");
+  var reprobeStatus = document.getElementById("reprobe-status");
+  if (reprobeBtn) {
+    reprobeBtn.addEventListener("click", function () {
+      reprobeBtn.disabled = true;
+      if (reprobeStatus) reprobeStatus.textContent = " probing…";
+      fetch("/control/probe", { method: "POST" })
+        .then(function (r) { return r.json(); })
+        .then(function () {
+          if (reprobeStatus) reprobeStatus.textContent = "";
+          poll();  // refresh the table with fresh deep-probe results
+        })
+        .catch(function () {
+          if (reprobeStatus) reprobeStatus.textContent = " probe failed";
+        })
+        .then(function () { reprobeBtn.disabled = false; });
     });
   }
 
