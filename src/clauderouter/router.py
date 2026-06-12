@@ -144,9 +144,12 @@ def _transform_sse_event(raw: bytes, in_thinking: bool) -> tuple[bool, list[byte
 
 def _is_thinking_signature_error(body: dict) -> bool:
     err = body.get("error", {})
+    if err.get("type") != "invalid_request_error":
+        return False
+    msg = err.get("message", "")
     return (
-        err.get("type") == "invalid_request_error"
-        and "Invalid signature in thinking block" in err.get("message", "")
+        "Invalid signature in thinking block" in msg
+        or ("thinking.signature" in msg and "Field required" in msg)
     )
 
 

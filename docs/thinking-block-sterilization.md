@@ -5,10 +5,13 @@
 Anthropic cryptographically signs extended-thinking blocks. Other providers
 (Ollama local/remote/cloud) emit thinking blocks with missing or invalid
 signatures. Once such a block enters Claude Code's conversation history, every
-subsequent request to the real Anthropic API fails with:
+subsequent request to the real Anthropic API fails with one of two
+`invalid_request_error` 400s, depending on whether the upstream block carried
+a (bad) signature or none at all:
 
 ```
 400 invalid_request_error: Invalid signature in thinking block
+400 invalid_request_error: <path>.thinking.signature: Field required
 ```
 
 Because claudeRouter's whole point is switching providers mid-session, a
@@ -41,12 +44,14 @@ will accept — currently Anthropic itself. All others default to `false`.
 
 ### Layer 2 — auto-retry on 400 (recovery)
 
-If Anthropic still rejects a request with the signature error (history was
-corrupted before this feature existed, or `/compact` replays a broken
-session), the proxy:
+If Anthropic still rejects a request with either signature-error variant
+(history was corrupted before this feature existed, or `/compact` replays a
+broken session), the proxy:
 
 1. Reads the 400 error body from upstream.
-2. Checks whether it is specifically the thinking-signature error
+2. Checks whether it is one of the two thinking-signature errors —
+   `Invalid signature in thinking block` or
+   `<path>.thinking.signature: Field required`
    (`_is_thinking_signature_error`).
 3. If so, rewrites every `thinking` block in the request's `messages` into a
    `<thinking>…</thinking>` text block
