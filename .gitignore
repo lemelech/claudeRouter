@@ -6,3 +6,8 @@ dist/
 .env
 *.log
 .claude/settings.local.json
+
+# Local config may contain real API keys — never commit it (use config.example.toml)
+config.toml
+# Traffic log persistence
+*.jsonl
