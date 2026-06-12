@@ -89,9 +89,11 @@ Streaming (SSE) is passed through transparently.
 ```bash
 git clone <this-repo> ~/claudeRouter
 cd ~/claudeRouter
-uv tool install .          # puts `claudeRouter` on PATH (~/.local/bin)
-# or: pip install -e .     # fallback if you don't have uv
+uv tool install --editable .   # puts `claudeRouter` on PATH (~/.local/bin)
+# or: pip install -e .         # fallback if you don't have uv
 ```
+
+`--editable` links the installed command back to this checkout's `src/`, so future `git pull`s take effect on the next service restart — no reinstall needed (see [Updating](#updating)). `install.sh` does this for you.
 
 ### 2. Configure
 
@@ -155,6 +157,33 @@ use-cloud            # force Ollama cloud-routed model
 use-local            # force local Ollama
 use-auto             # back to automatic chain selection
 ```
+
+## Updating
+
+With an editable install, pull and restart — the running service picks up the new code:
+
+```bash
+cd ~/claudeRouter
+git pull
+systemctl --user restart claudeRouter
+```
+
+If you originally installed **without** `--editable` (the running command is a frozen copy that won't change on `git pull`), reinstall once to switch over, then restart:
+
+```bash
+cd ~/claudeRouter
+uv tool install --force --reinstall --editable .
+systemctl --user restart claudeRouter
+```
+
+Verify the restart picked up your changes:
+
+```bash
+systemctl --user status claudeRouter --no-pager | head -3
+curl -s http://localhost:4891/control/health        # -> ok
+```
+
+(Not running as a systemd service? Just restart however you launched it — e.g. kill the process and let `cc` respawn it, or rerun your start command.)
 
 ## Known Limitations
 
