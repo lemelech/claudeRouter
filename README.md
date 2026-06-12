@@ -32,10 +32,10 @@ Priority order for auto-detection and fallback:
 Open **`http://localhost:4891/dashboard`** in a browser (pin the tab) for a live view of where your traffic is going. It's a single self-contained page — no CDN, no build step — that polls the proxy every ~1.5s.
 
 It shows:
-- **Current mode** and, in `auto` mode, the **effective provider** the chain would pick right now
+- **Current mode** and, in `auto` mode, the **effective provider** the chain would pick right now — plus **switch buttons** (Auto + one per provider) to change mode in place, same as the `use-*` shell commands (`POST /control/use/{name}`)
 - **Provider health** — priority, healthy/unhealthy, **ready** (a reachable provider with no API key shows a `no key` badge instead of looking usable), **deep probe** result, last check, last error (effective provider's row highlighted), and a **Re-test** button
 - **Traffic timeline** — request counts bucketed by minute, colored per provider
-- **Usage breakdown** — per provider: request count, total input/output tokens, average latency
+- **Usage breakdown** — grouped per provider **and per model** (the served/translated model): request count, total input/output tokens, average latency
 - **Recent requests** — one row each: time, session, provider, model (`requested → translated` when they differ), status, request/response sizes, tokens, duration, the fallback chain when retried, and a `skipped` annotation showing **why** providers were passed over (e.g. on a 503: `openrouter: not ready (no api key)`)
 
 ### Health: reachability vs. real

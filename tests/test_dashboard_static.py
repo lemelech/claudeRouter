@@ -29,3 +29,11 @@ def test_dashboard_references_control_endpoints() -> None:
     content = DASHBOARD_PATH.read_text(encoding="utf-8")
     assert "/control/status" in content
     assert "/control/traffic" in content
+
+
+def test_dashboard_wires_mode_switch_and_probe() -> None:
+    content = DASHBOARD_PATH.read_text(encoding="utf-8")
+    # Mode-switch buttons POST to /control/use/{name}.
+    assert "/control/use/" in content
+    # Deep-probe "Re-test" button.
+    assert "/control/probe" in content

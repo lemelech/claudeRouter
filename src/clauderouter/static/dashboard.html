@@ -135,6 +135,20 @@
   }
   #reprobe-btn:disabled { opacity: 0.5; cursor: default; }
   #reprobe-status { font-size: 0.7em; color: #888; font-weight: normal; }
+  #mode-switch {
+    display: flex; align-items: center; gap: 0.4em;
+    flex-basis: 100%; margin-top: 0.5em; flex-wrap: wrap;
+  }
+  .mode-btn {
+    font-size: 0.8em; padding: 0.2em 0.7em; cursor: pointer;
+    border: 1px solid #444; border-radius: 4px; background: transparent; color: inherit;
+  }
+  .mode-btn:hover { border-color: #888; }
+  .mode-btn.active {
+    background: var(--green); border-color: var(--green); color: #06210f; font-weight: bold;
+  }
+  tr.usage-provider > td { font-weight: bold; border-top: 1px solid #333; }
+  tr.usage-model > td { color: #aaa; padding-left: 1.2em; }
 
   .dot {
     display: inline-block;
@@ -202,6 +216,7 @@
   <span class="badge"><span class="label">mode:</span><span id="mode-value">&hellip;</span></span>
   <span class="badge effective"><span class="label">routing to:</span><span id="effective-value">&hellip;</span></span>
   <span id="conn-status">last updated: &mdash;</span>
+  <div id="mode-switch"><span class="label">switch:</span></div>
 </header>
 
 <main>
@@ -239,7 +254,7 @@
     <table id="usage-table">
       <thead>
         <tr>
-          <th>Provider</th>
+          <th>Provider / model</th>
           <th class="num">Requests</th>
           <th class="num">Input tokens</th>
           <th class="num">Output tokens</th>
@@ -354,6 +369,41 @@
       effective = mode === null || mode === undefined ? "—" : mode;
     }
     effEl.textContent = effective;
+
+    renderModeSwitch(status, mode);
+  }
+
+  // ── Mode switcher (POST /control/use/{name}) ─────────────────────────
+  var modeSwitchBuilt = false;
+  function renderModeSwitch(status, mode) {
+    var wrap = document.getElementById("mode-switch");
+    if (!wrap || !status || !Array.isArray(status.providers)) return;
+
+    // Build the buttons once (Auto + one per provider); afterwards just
+    // re-highlight, so a poll mid-click doesn't rip the buttons out.
+    var names = ["auto"].concat(status.providers.map(function (p) { return p.name; }));
+    if (!modeSwitchBuilt) {
+      names.forEach(function (name) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "mode-btn";
+        btn.dataset.mode = name;
+        btn.textContent = name;
+        btn.addEventListener("click", function () { setMode(name); });
+        wrap.appendChild(btn);
+      });
+      modeSwitchBuilt = true;
+    }
+    wrap.querySelectorAll(".mode-btn").forEach(function (btn) {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
+  }
+
+  function setMode(name) {
+    fetch("/control/use/" + encodeURIComponent(name), { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function () { poll(); })   // reflect the new mode immediately
+      .catch(function () { setConnState(false); });
   }
 
   // ── Provider health table ─────────────────────────────────────────────
@@ -534,13 +584,10 @@
       return;
     }
 
-    var stats = {}; // provider -> { count, inputTokens, outputTokens, durationSum, durationCount }
-    entries.forEach(function (e) {
-      var provider = e.provider || "none";
-      if (!stats[provider]) {
-        stats[provider] = { count: 0, inputTokens: 0, outputTokens: 0, durationSum: 0, durationCount: 0 };
-      }
-      var s = stats[provider];
+    function blank() {
+      return { count: 0, inputTokens: 0, outputTokens: 0, durationSum: 0, durationCount: 0 };
+    }
+    function accumulate(s, e) {
       s.count += 1;
       if (e.usage) {
         s.inputTokens += e.usage.input_tokens || 0;
@@ -550,19 +597,48 @@
         s.durationSum += e.duration_ms;
         s.durationCount += 1;
       }
+    }
+    function avg(s) { return s.durationCount > 0 ? s.durationSum / s.durationCount : 0; }
+
+    // provider -> { total, models: { modelLabel -> stats } }
+    var stats = {};
+    entries.forEach(function (e) {
+      var provider = e.provider || "none";
+      // The model that actually served the request (falls back to requested).
+      var model = e.translated_model || e.requested_model || "—";
+      if (!stats[provider]) stats[provider] = { total: blank(), models: {} };
+      if (!stats[provider].models[model]) stats[provider].models[model] = blank();
+      accumulate(stats[provider].total, e);
+      accumulate(stats[provider].models[model], e);
     });
 
     Object.keys(stats).sort().forEach(function (provider) {
-      var s = stats[provider];
-      var avgDuration = s.durationCount > 0 ? s.durationSum / s.durationCount : 0;
-      var tr = document.createElement("tr");
-      tr.innerHTML =
+      var g = stats[provider];
+      // Provider subtotal row (bold).
+      var ptr = document.createElement("tr");
+      ptr.className = "usage-provider";
+      ptr.innerHTML =
         "<td>" + escapeHtml(provider) + "</td>" +
-        "<td class=\"num\">" + s.count + "</td>" +
-        "<td class=\"num\">" + s.inputTokens + "</td>" +
-        "<td class=\"num\">" + s.outputTokens + "</td>" +
-        "<td class=\"num\">" + fmtDuration(avgDuration) + "</td>";
-      tbody.appendChild(tr);
+        "<td class=\"num\">" + g.total.count + "</td>" +
+        "<td class=\"num\">" + g.total.inputTokens + "</td>" +
+        "<td class=\"num\">" + g.total.outputTokens + "</td>" +
+        "<td class=\"num\">" + fmtDuration(avg(g.total)) + "</td>";
+      tbody.appendChild(ptr);
+      // Per-model rows (indented), busiest first.
+      Object.keys(g.models).sort(function (a, b) {
+        return g.models[b].count - g.models[a].count;
+      }).forEach(function (model) {
+        var m = g.models[model];
+        var mtr = document.createElement("tr");
+        mtr.className = "usage-model";
+        mtr.innerHTML =
+          "<td class=\"model-cell\">↳ " + escapeHtml(model) + "</td>" +
+          "<td class=\"num\">" + m.count + "</td>" +
+          "<td class=\"num\">" + m.inputTokens + "</td>" +
+          "<td class=\"num\">" + m.outputTokens + "</td>" +
+          "<td class=\"num\">" + fmtDuration(avg(m)) + "</td>";
+        tbody.appendChild(mtr);
+      });
     });
   }
 
