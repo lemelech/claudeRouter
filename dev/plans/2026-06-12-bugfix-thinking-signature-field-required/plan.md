@@ -138,8 +138,23 @@ self-heal without user intervention.
 - [x] Review findings triaged / resolved
 - [x] Surfaced to user: no end-to-end integration test of the sterilize-and-retry path (minor, optional tester follow-up)
 - [x] Docs-writer: documentation updated
+- [x] Commit created (a1f5fcf)
+
+#### Iteration 2 — secondary fix (non-SSE response sterilization)
+
+- [x] Engineer: sterilize `thinking` blocks in non-SSE JSON responses from non-native providers
+- [x] Tester: write tests (non-native sterilized, native passthrough)
+- [x] Tester: full suite green
+- [x] Reviewer: report received (round 1 — major issue found)
+- [x] Engineer: short-circuit sterilization to original bytes when no `thinking` block present (no `content: []` injection / no re-serialize of arbitrary JSON) — reviewer major
+- [x] Tester: fix/finish non-Messages JSON byte-identical-passthrough test; re-run suite green (101/101)
+- [x] Reviewer: re-review (round 2) — major resolved, no blockers
+- [x] Review findings triaged / resolved
+- [x] Docs-writer: documentation updated
+- [x] Reviewed docs-writer's flag on the 400-retry condition — confirmed correct as-is (native provider returns the signature 400), no change
 - [ ] Commit created
-- [ ] Surfaced: secondary non-SSE response sterilization deferred to follow-up (per plan recommendation)
+- [x] Surfaced to user: br/zstd-encoded JSON bodies are not sterilized (exception-safe passthrough; mirrors pre-existing SSE limitation)
+- [x] Surfaced to user: optional — strengthen `test_sterilize_response_with_non_list_content_returned_unchanged` with an identity assertion (minor, not done)
 
 ## Out of scope
 

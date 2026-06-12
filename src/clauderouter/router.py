@@ -193,6 +193,34 @@ def _clamp_max_tokens(body: dict, limit: int) -> dict:
     return clamped
 
 
+def _sterilize_thinking_in_content(content: list) -> list:
+    """Convert thinking blocks in a content array to text blocks.
+
+    Shared by request-history sterilization (_sterilize_thinking_in_messages)
+    and non-SSE response sterilization (_sterilize_thinking_in_response).
+
+    Returns the same list object if no thinking blocks are found, enabling
+    identity-based short-circuit checks in callers.
+    """
+    thinking_found = False
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "thinking":
+            thinking_found = True
+            break
+    if not thinking_found:
+        return content
+    new_content = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "thinking":
+            new_content.append({
+                "type": "text",
+                "text": f"<thinking>\n{block.get('thinking', '')}\n</thinking>",
+            })
+        else:
+            new_content.append(block)
+    return new_content
+
+
 def _sterilize_thinking_in_messages(body: dict) -> dict:
     """Convert thinking blocks in message history to text blocks.
 
@@ -205,17 +233,31 @@ def _sterilize_thinking_in_messages(body: dict) -> dict:
         if not isinstance(content, list):
             new_messages.append(msg)
             continue
-        new_content = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "thinking":
-                new_content.append({
-                    "type": "text",
-                    "text": f"<thinking>\n{block.get('thinking', '')}\n</thinking>",
-                })
-            else:
-                new_content.append(block)
-        new_messages.append({**msg, "content": new_content})
+        new_messages.append({**msg, "content": _sterilize_thinking_in_content(content)})
     return {**body, "messages": new_messages}
+
+
+def _sterilize_thinking_in_response(body: dict) -> dict:
+    """Convert thinking blocks in a non-streaming Messages response to text blocks.
+
+    Only rewrites Messages-shaped responses that contain thinking blocks; all other
+    JSON (error bodies, model listings, etc.) are returned unchanged via identity
+    to enable byte-identical passthrough.
+
+    Mirrors the SSE thinking-block sterilization for non-SSE JSON responses from
+    providers without native_thinking, so signature-less thinking blocks never
+    enter Claude Code's history.
+
+    Returns the same dict object if no thinking blocks are present, enabling
+    the caller's identity check to short-circuit byte-identical passthrough.
+    """
+    content = body.get("content")
+    if not isinstance(content, list):
+        return body
+    sterilized_content = _sterilize_thinking_in_content(content)
+    if sterilized_content is content:
+        return body
+    return {**body, "content": sterilized_content}
 
 
 def _update_usage_from_sse_event(raw: bytes, usage: dict) -> None:
@@ -268,6 +310,16 @@ def _decompress_all(body: bytes, content_encoding: str) -> bytes:
         return b""
 
 
+def _recompress(data: bytes, content_encoding: str) -> bytes:
+    """Re-compress `data` to match `content_encoding` (inverse of _decompress_all)."""
+    enc = (content_encoding or "").lower().strip()
+    if enc in ("gzip", "x-gzip"):
+        return gzip.compress(data)
+    if enc == "deflate":
+        return zlib.compress(data)
+    return data
+
+
 def _extract_usage_from_json(body: bytes, usage: dict) -> None:
     """Best-effort: pull `usage` out of a non-streaming Messages response body.
 
@@ -292,10 +344,23 @@ async def _stream(upstream: aiohttp.ClientResponse, response: web.StreamResponse
     if not is_sse:
         body = bytearray()
         async for chunk in upstream.content.iter_any():
-            await response.write(chunk)
-            response_bytes += len(chunk)
+            if not sterilize:
+                await response.write(chunk)
+                response_bytes += len(chunk)
             body.extend(chunk)
-        _extract_usage_from_json(_decompress_all(bytes(body), content_encoding), usage)
+        decompressed = _decompress_all(bytes(body), content_encoding)
+        _extract_usage_from_json(decompressed, usage)
+        if sterilize:
+            out = bytes(body)
+            try:
+                data = json.loads(decompressed)
+                sterilized = _sterilize_thinking_in_response(data)
+                if sterilized is not data:
+                    out = _recompress(json.dumps(sterilized).encode(), content_encoding)
+            except Exception:
+                log.debug("Response thinking sterilization failed", exc_info=True)
+            await response.write(out)
+            response_bytes += len(out)
         return response_bytes, usage
 
     if not sterilize:
@@ -495,8 +560,9 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
                   _truncate(error_body.get("error", {}).get("message", "")), None)
             return web.Response(status=400, headers=resp_headers, body=error_bytes)
 
-        is_sse = "text/event-stream" in upstream.headers.get("Content-Type", "")
-        sterilize = is_sse and not provider.native_thinking
+        content_type = upstream.headers.get("Content-Type", "")
+        is_sse = "text/event-stream" in content_type
+        sterilize = not provider.native_thinking and (is_sse or "application/json" in content_type)
 
         response = web.StreamResponse(
             status=upstream.status,

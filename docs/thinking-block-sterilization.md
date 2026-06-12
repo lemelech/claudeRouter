@@ -25,22 +25,41 @@ history is already corrupted.
 
 ### Layer 1 — response sterilization (prevention)
 
-For SSE responses from any provider without `native_thinking = true` in
-config, the proxy rewrites thinking-block events into plain text-block events
-before they reach Claude Code (`_transform_sse_event` in
-`src/clauderouter/router.py`):
+For any provider without `native_thinking = true` in config, the proxy
+rewrites thinking blocks into plain text before they reach Claude Code,
+covering both response shapes:
 
-- `content_block_start` with `type: thinking` becomes a text block, and a
-  synthetic delta injects an opening `<thinking>\n` marker.
-- `thinking_delta` events become `text_delta` events carrying the same text.
-- `content_block_stop` is preceded by a synthetic `\n</thinking>` delta.
+- **SSE streams** — thinking-block events are rewritten into text-block
+  events (`_transform_sse_event` in `src/clauderouter/router.py`):
+  - `content_block_start` with `type: thinking` becomes a text block, and a
+    synthetic delta injects an opening `<thinking>\n` marker.
+  - `thinking_delta` events become `text_delta` events carrying the same
+    text.
+  - `content_block_stop` is preceded by a synthetic `\n</thinking>` delta.
 
-The reasoning content is preserved verbatim for the user; only the block type
-changes. Since the blocks stored in history are now ordinary text, Anthropic
-never sees an unsigned thinking block on later turns.
+- **Non-streaming `application/json` responses** — the proxy buffers the
+  body, walks the top-level `content[]`, and converts any `thinking` block
+  to a `<thinking>…</thinking>` text block (`_sterilize_thinking_in_response`,
+  via the non-SSE branch of `_stream`). If the body was gzip/deflate
+  compressed, it's decompressed for the rewrite and re-compressed to the
+  original `Content-Encoding` before forwarding.
+
+In both cases the reasoning content is preserved verbatim for the user; only
+the block type changes. Since the blocks stored in history are now ordinary
+text, Anthropic never sees an unsigned thinking block on later turns.
+
+For the non-streaming path, a response with no `thinking` block (or any
+non-Messages JSON, e.g. error bodies or model listings) is forwarded
+byte-identical — no re-serialization or field injection occurs. Any
+parse/transform/recompress failure falls back to forwarding the original
+bytes untouched. Bodies compressed with `br` or `zstd` are not decompressed
+(the proxy's decompressor only supports gzip/deflate) and so pass through
+untouched without sterilization — the same limitation that applies on the
+SSE side; no currently configured provider uses `br`/`zstd`.
 
 Set `native_thinking = true` only on providers whose signatures Anthropic
-will accept — currently Anthropic itself. All others default to `false`.
+will accept — currently Anthropic itself. All others default to `false`, and
+native providers get byte-identical passthrough on both response shapes.
 
 ### Layer 2 — auto-retry on 400 (recovery)
 

@@ -49,7 +49,7 @@ Anthropic cryptographically signs extended-thinking blocks; other providers gene
 
 Two-layer protection:
 
-1. **Response sterilization** — SSE responses from providers without `native_thinking = true` have their thinking blocks converted to text (`<thinking>…</thinking>`) before reaching Claude Code. This prevents the problem from occurring in future turns.
+1. **Response sterilization** — responses (both SSE event streams and non-streaming `application/json` bodies) from providers without `native_thinking = true` have their thinking blocks converted to text (`<thinking>…</thinking>`) before reaching Claude Code. This prevents the problem from occurring in future turns.
 
 2. **Auto-retry on 400** — if Anthropic returns either signature-error variant (e.g. history was already corrupted, or `/compact` is run on a broken session), the proxy sterilizes thinking blocks in the request messages and retries transparently. `/compact` + auto-retry is the recovery path: the compacted summary replaces all history with clean text, fully recovering the session.
 
