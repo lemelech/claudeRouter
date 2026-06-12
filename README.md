@@ -29,7 +29,43 @@ Priority order for auto-detection and fallback:
 
 ## Dashboard
 
-Open `http://localhost:4891/dashboard` for a live view of the current mode, the provider auto mode would currently pick, provider health, and recent request traffic (provider, model, sizes, tokens, status, duration, grouped by session).
+Open **`http://localhost:4891/dashboard`** in a browser (pin the tab) for a live view of where your traffic is going. It's a single self-contained page — no CDN, no build step — that polls the proxy every ~1.5s.
+
+It shows:
+- **Current mode** and, in `auto` mode, the **effective provider** the chain would pick right now
+- **Provider health** — priority, healthy/unhealthy, last check time, last error (the effective provider's row is highlighted)
+- **Traffic timeline** — request counts bucketed by minute, colored per provider
+- **Usage breakdown** — per provider: request count, total input/output tokens, average latency
+- **Recent requests** — one row each: time, session, provider, model (`requested → translated` when they differ), status, request/response sizes, tokens, duration, and the fallback chain when a request was retried
+
+### Sessions
+
+Each request is attributed to a **session** = the PID and working directory of the connecting process, resolved once per connection via `/proc`. This is the only OS-level signal that groups a main Claude Code session with its subagent fan-out (they share one connection pool). It's Linux-only and best-effort — anything it can't resolve (non-Linux, IPv6 loopback, permissions, races) shows as `unknown` and never affects proxying.
+
+### Request log
+
+Traffic is held in an in-memory ring buffer (most recent N requests) and also appended to a JSONL file for persistence across restarts — one JSON object per line, handy for `jq`/`grep` after the fact:
+
+```bash
+tail -f ~/.local/state/claudeRouter/requests.jsonl | jq .
+```
+
+Logging is fully non-blocking and exception-isolated: it never delays or alters a response, and SSE streams are passed through byte-for-byte (token usage is observed in passing, not buffered).
+
+### Configuration
+
+Under `[server]` in `~/.config/claudeRouter/config.toml` (see `config.example.toml`):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `traffic_log_path` | `~/.local/state/claudeRouter/requests.jsonl` | JSONL persistence file. Set to `""` to disable file writes (ring buffer / dashboard still work). |
+| `traffic_log_ring_size` | `500` | Recent requests kept in memory for the dashboard. |
+| `traffic_log_queue_size` | `1000` | Max entries buffered before new ones are dropped (under a burst). |
+
+### Endpoints
+
+- `GET /dashboard` — the HTML page above
+- `GET /control/traffic` — JSON the page polls: `{ "mode", "effective_provider", "entries": [...] }`, entries most-recent-first. Scrape it directly if you want your own tooling.
 
 ## How It Works
 
