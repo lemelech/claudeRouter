@@ -7,7 +7,9 @@ import gzip
 import json
 import logging
 import re
+import time
 import zlib
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -15,6 +17,8 @@ from aiohttp import web
 
 from .health import HealthRegistry
 from .providers import Provider
+from .sessions import UNKNOWN_SESSION
+from .traffic_log import LogEntry
 
 if TYPE_CHECKING:
     pass
@@ -63,13 +67,11 @@ def _encode_sse_event(event_line: str | None, data: dict) -> bytes:
     return "\n".join(parts).encode() + b"\n\n"
 
 
-def _transform_sse_event(raw: bytes, in_thinking: bool) -> tuple[bool, list[bytes]]:
-    """Rewrite thinking-block SSE events as text-block events.
+def _parse_sse_data(raw: bytes) -> tuple[str | None, dict | None]:
+    """Extract the `event:` line and parsed `data:` JSON from a raw SSE event.
 
-    Returns (new_in_thinking, list of event byte chunks to emit).
-    Thinking blocks from non-Anthropic providers carry invalid signatures;
-    converting them to text blocks preserves the content without triggering
-    Anthropic's signature validation on future turns.
+    Returns (event_line, data) where either may be None if absent/unparseable.
+    Never raises.
     """
     event_str = raw.decode("utf-8", errors="replace")
 
@@ -82,11 +84,26 @@ def _transform_sse_event(raw: bytes, in_thinking: bool) -> tuple[bool, list[byte
             data_str = line[5:].strip()
 
     if not data_str or data_str == "[DONE]":
-        return in_thinking, [raw + b"\n\n"]
+        return event_line, None
 
     try:
         data = json.loads(data_str)
     except json.JSONDecodeError:
+        return event_line, None
+
+    return event_line, data
+
+
+def _transform_sse_event(raw: bytes, in_thinking: bool) -> tuple[bool, list[bytes]]:
+    """Rewrite thinking-block SSE events as text-block events.
+
+    Returns (new_in_thinking, list of event byte chunks to emit).
+    Thinking blocks from non-Anthropic providers carry invalid signatures;
+    converting them to text blocks preserves the content without triggering
+    Anthropic's signature validation on future turns.
+    """
+    event_line, data = _parse_sse_data(raw)
+    if data is None:
         return in_thinking, [raw + b"\n\n"]
 
     event_type = data.get("type")
@@ -178,12 +195,70 @@ def _sterilize_thinking_in_messages(body: dict) -> dict:
     return {**body, "messages": new_messages}
 
 
+def _update_usage_from_sse_event(raw: bytes, usage: dict) -> None:
+    """Best-effort: pull token counts out of message_start/message_delta events.
+
+    Never raises — malformed/unexpected JSON just leaves `usage` unchanged.
+    """
+    try:
+        _event_line, data = _parse_sse_data(raw)
+        if data is None:
+            return
+        event_type = data.get("type")
+        if event_type == "message_start":
+            msg_usage = data.get("message", {}).get("usage", {})
+            usage["input_tokens"] = msg_usage.get("input_tokens", 0)
+            usage["output_tokens"] = msg_usage.get("output_tokens", 0)
+            usage["cache_read_input_tokens"] = msg_usage.get("cache_read_input_tokens", 0)
+            usage["cache_creation_input_tokens"] = msg_usage.get("cache_creation_input_tokens", 0)
+        elif event_type == "message_delta":
+            delta_usage = data.get("usage", {})
+            if "output_tokens" in delta_usage:
+                usage["output_tokens"] = delta_usage["output_tokens"]
+    except Exception:
+        pass
+
+
+def _extract_usage_from_json(body: bytes, usage: dict) -> None:
+    """Best-effort: pull `usage` out of a non-streaming Messages response body.
+
+    Never raises — malformed/unexpected JSON just leaves `usage` unchanged.
+    """
+    try:
+        data = json.loads(body)
+        msg_usage = data.get("usage", {})
+        usage["input_tokens"] = msg_usage.get("input_tokens", 0)
+        usage["output_tokens"] = msg_usage.get("output_tokens", 0)
+        usage["cache_read_input_tokens"] = msg_usage.get("cache_read_input_tokens", 0)
+        usage["cache_creation_input_tokens"] = msg_usage.get("cache_creation_input_tokens", 0)
+    except Exception:
+        pass
+
+
 async def _stream(upstream: aiohttp.ClientResponse, response: web.StreamResponse,
-                  sterilize: bool) -> None:
-    if not sterilize:
+                  sterilize: bool, is_sse: bool) -> tuple[int, dict]:
+    usage: dict = {}
+    response_bytes = 0
+
+    if not is_sse:
+        body = bytearray()
         async for chunk in upstream.content.iter_any():
             await response.write(chunk)
-        return
+            response_bytes += len(chunk)
+            body.extend(chunk)
+        _extract_usage_from_json(bytes(body), usage)
+        return response_bytes, usage
+
+    if not sterilize:
+        obs_buf = b""
+        async for chunk in upstream.content.iter_any():
+            await response.write(chunk)
+            response_bytes += len(chunk)
+            obs_buf += chunk
+            while b"\n\n" in obs_buf:
+                raw_event, obs_buf = obs_buf.split(b"\n\n", 1)
+                _update_usage_from_sse_event(raw_event, usage)
+        return response_bytes, usage
 
     in_thinking = False
     buf = b""
@@ -191,11 +266,23 @@ async def _stream(upstream: aiohttp.ClientResponse, response: web.StreamResponse
         buf += chunk
         while b"\n\n" in buf:
             raw_event, buf = buf.split(b"\n\n", 1)
+            _update_usage_from_sse_event(raw_event, usage)
             in_thinking, events = _transform_sse_event(raw_event, in_thinking)
             for evt in events:
                 await response.write(evt)
+                response_bytes += len(evt)
     if buf:
         await response.write(buf)
+        response_bytes += len(buf)
+    return response_bytes, usage
+
+
+def _truncate(s: str, n: int = 200) -> str:
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 async def handle_proxy(request: web.Request) -> web.StreamResponse:
@@ -203,33 +290,70 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
     registry: HealthRegistry = request.app["health_registry"]
     session: aiohttp.ClientSession = request.app["client_session"]
 
+    start = time.monotonic()
+
     raw_body = await request.read()
+    request_bytes = len(raw_body)
     try:
         body = json.loads(raw_body)
     except json.JSONDecodeError:
         body = {}
+
+    peername = request.transport.get_extra_info("peername")
+    sockname = request.transport.get_extra_info("sockname")
+    if peername and sockname:
+        session_info = request.app["session_resolver"].resolve(
+            peername[0], peername[1], sockname[0], sockname[1])
+    else:
+        session_info = UNKNOWN_SESSION
 
     requested_model: str = body.get("model", "")
     tried: set[str] = set()
     signature_sterilized = False  # only sterilize once per request
     max_tokens_clamped = False    # only clamp max_tokens once per request
 
+    def _emit(provider_name: str | None, translated_model: str | None,
+              response_bytes: int, content_type: str, status: int,
+              error_summary: str | None, usage: dict | None) -> None:
+        try:
+            request.app["traffic_log"].emit(LogEntry(
+                timestamp=_now_iso(),
+                session=session_info,
+                provider=provider_name,
+                mode=get_mode(),
+                requested_model=requested_model,
+                translated_model=translated_model,
+                tried=list(tried),
+                request_bytes=request_bytes,
+                response_bytes=response_bytes,
+                response_content_type=content_type,
+                status=status,
+                error_summary=error_summary,
+                usage=usage or None,
+                duration_ms=(time.monotonic() - start) * 1000,
+            ))
+        except Exception:
+            log.debug("traffic log emit failed", exc_info=True)
+
     while True:
         provider = pick_provider(requested_model, providers, registry, tried)
         if provider is None:
             tried_str = ", ".join(tried) if tried else "none"
+            message = (
+                f"No healthy provider available for model {requested_model!r} "
+                f"(mode={_mode!r}, tried={tried_str})."
+            )
+            body_bytes = json.dumps({
+                "error": {
+                    "type": "provider_unavailable",
+                    "message": message,
+                }
+            }).encode()
+            _emit(None, None, len(body_bytes), "application/json", 503, message, None)
             return web.Response(
                 status=503,
                 content_type="application/json",
-                body=json.dumps({
-                    "error": {
-                        "type": "provider_unavailable",
-                        "message": (
-                            f"No healthy provider available for model {requested_model!r} "
-                            f"(mode={_mode!r}, tried={tried_str})."
-                        ),
-                    }
-                }),
+                body=body_bytes,
             )
 
         upstream_url = provider.base_url + request.path_qs
@@ -298,6 +422,9 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
                 body = _clamp_max_tokens(body, limit)
                 max_tokens_clamped = True
                 continue  # retry same provider (not added to tried)
+            _emit(provider.name, mutated["model"], len(error_bytes),
+                  resp_headers.get("Content-Type", "application/json"), 400,
+                  _truncate(error_body.get("error", {}).get("message", "")), None)
             return web.Response(status=400, headers=resp_headers, body=error_bytes)
 
         is_sse = "text/event-stream" in upstream.headers.get("Content-Type", "")
@@ -310,8 +437,10 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
         )
         await response.prepare(request)
 
+        response_bytes = 0
+        usage: dict = {}
         try:
-            await _stream(upstream, response, sterilize)
+            response_bytes, usage = await _stream(upstream, response, sterilize, is_sse)
         except (aiohttp.ClientError, ConnectionResetError) as e:
             log.debug("Stream closed from %s: %s", provider.name, e)
         finally:
@@ -321,4 +450,7 @@ async def handle_proxy(request: web.Request) -> web.StreamResponse:
             await response.write_eof()
         except (aiohttp.ClientError, ConnectionResetError):
             pass
+
+        _emit(provider.name, mutated["model"], response_bytes,
+              upstream.headers.get("Content-Type", ""), upstream.status, None, usage)
         return response

@@ -27,6 +27,10 @@ Priority order for auto-detection and fallback:
 - **On-demand:** shell commands (`use-anthropic`, `use-remote`, `use-local`, `use-auto`) hit a proxy control endpoint to switch immediately — works mid-session
 - **Status:** `claude-status` shows the current active provider and last health check times
 
+## Dashboard
+
+Open `http://localhost:4891/dashboard` for a live view of the current mode, the provider auto mode would currently pick, provider health, and recent request traffic (provider, model, sizes, tokens, status, duration, grouped by session).
+
 ## How It Works
 
 Ollama exposes an Anthropic-compatible API, so the proxy is mostly pass-through. Per-provider it rewrites:

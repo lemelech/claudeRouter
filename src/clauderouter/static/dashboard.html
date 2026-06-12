@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claudeRouter dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-border: #2a2f3a;
+    --text: #e6e8eb;
+    --text-dim: #9aa3b2;
+    --green: #3ddc84;
+    --red: #ff5c5c;
+    --accent: #4f8cff;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--panel-border);
+    flex-wrap: wrap;
+  }
+
+  header h1 {
+    font-size: 16px;
+    margin: 0;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #232838;
+    border: 1px solid var(--panel-border);
+    font-size: 13px;
+  }
+
+  .badge.effective {
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .badge .label {
+    color: var(--text-dim);
+    font-weight: 400;
+  }
+
+  #conn-status {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  #conn-status.lost {
+    color: var(--red);
+    font-weight: 600;
+  }
+
+  main {
+    padding: 16px 20px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  section.panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+
+  section.panel h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--panel-border);
+    white-space: nowrap;
+  }
+
+  th {
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  tr.effective-row {
+    background: rgba(79, 140, 255, 0.12);
+  }
+
+  .ok { color: var(--green); }
+  .err { color: var(--red); }
+
+  .dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 4px;
+  }
+
+  .dot.ok { background: var(--green); }
+  .dot.err { background: var(--red); }
+
+  #timeline-wrap {
+    overflow-x: auto;
+  }
+
+  #timeline-canvas {
+    display: block;
+  }
+
+  #legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  #legend .swatch {
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    border-radius: 2px;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+
+  .model-cell {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tried-note {
+    color: var(--text-dim);
+    font-size: 11px;
+    cursor: help;
+  }
+
+  td.num, th.num {
+    text-align: right;
+  }
+
+  .empty {
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: 8px 0;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>claudeRouter</h1>
+  <span class="badge"><span class="label">mode:</span><span id="mode-value">&hellip;</span></span>
+  <span class="badge effective"><span class="label">routing to:</span><span id="effective-value">&hellip;</span></span>
+  <span id="conn-status">last updated: &mdash;</span>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Provider health</h2>
+    <table id="health-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Priority</th>
+          <th>Healthy</th>
+          <th>Last check</th>
+          <th>Last error</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Traffic timeline (by minute)</h2>
+    <div id="timeline-wrap">
+      <canvas id="timeline-canvas" width="1100" height="160"></canvas>
+    </div>
+    <div id="legend"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Provider / model usage</h2>
+    <table id="usage-table">
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th class="num">Requests</th>
+          <th class="num">Input tokens</th>
+          <th class="num">Output tokens</th>
+          <th class="num">Avg duration (ms)</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Recent requests</h2>
+    <table id="requests-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Session</th>
+          <th>Provider</th>
+          <th>Model</th>
+          <th>Status</th>
+          <th class="num">Req</th>
+          <th class="num">Resp</th>
+          <th class="num">Tokens (in/out)</th>
+          <th class="num">Duration (ms)</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var POLL_INTERVAL_MS = 1500;
+
+  // Small fixed palette keyed by provider name (assigned on first sight, cycling).
+  var PALETTE = ["#4f8cff", "#3ddc84", "#ffb84f", "#ff5c5c", "#b07cff", "#4fd9ff"];
+  var providerColors = {};
+  var nextColorIdx = 0;
+
+  function colorForProvider(name) {
+    var key = name || "unknown";
+    if (!providerColors[key]) {
+      providerColors[key] = PALETTE[nextColorIdx % PALETTE.length];
+      nextColorIdx += 1;
+    }
+    return providerColors[key];
+  }
+
+  var lastStatus = null;
+  var lastTraffic = null;
+
+  function setConnState(ok) {
+    var el = document.getElementById("conn-status");
+    if (ok) {
+      var now = new Date();
+      var hh = String(now.getHours()).padStart(2, "0");
+      var mm = String(now.getMinutes()).padStart(2, "0");
+      var ss = String(now.getSeconds()).padStart(2, "0");
+      el.textContent = "last updated: " + hh + ":" + mm + ":" + ss;
+      el.classList.remove("lost");
+    } else {
+      el.textContent = "connection lost, retrying…";
+      el.classList.add("lost");
+    }
+  }
+
+  function fmtTime(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    var hh = String(d.getHours()).padStart(2, "0");
+    var mm = String(d.getMinutes()).padStart(2, "0");
+    var ss = String(d.getSeconds()).padStart(2, "0");
+    return hh + ":" + mm + ":" + ss;
+  }
+
+  function fmtBytes(n) {
+    if (typeof n !== "number") return "—";
+    if (n < 1024) return n + " B";
+    return (n / 1024).toFixed(1) + " KB";
+  }
+
+  function fmtDuration(n) {
+    if (typeof n !== "number") return "—";
+    return n.toFixed(1);
+  }
+
+  function escapeHtml(s) {
+    if (s === null || s === undefined) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  // ── Header ─────────────────────────────────────────────────────────────
+
+  function renderHeader(status, traffic) {
+    var mode = status ? status.mode : null;
+    var modeEl = document.getElementById("mode-value");
+    var effEl = document.getElementById("effective-value");
+
+    modeEl.textContent = mode === null || mode === undefined ? "—" : mode;
+
+    var effective;
+    if (mode === "auto") {
+      effective = traffic && traffic.effective_provider ? traffic.effective_provider : "—";
+    } else {
+      effective = mode === null || mode === undefined ? "—" : mode;
+    }
+    effEl.textContent = effective;
+  }
+
+  // ── Provider health table ─────────────────────────────────────────────
+
+  function renderHealth(status, traffic) {
+    var tbody = document.querySelector("#health-table tbody");
+    tbody.innerHTML = "";
+    if (!status || !Array.isArray(status.providers)) return;
+
+    var effective = traffic ? traffic.effective_provider : null;
+    if (status.mode && status.mode !== "auto") {
+      effective = status.mode;
+    }
+
+    status.providers.forEach(function (p) {
+      var tr = document.createElement("tr");
+      if (effective && p.name === effective) {
+        tr.classList.add("effective-row");
+      }
+
+      var healthy = !!p.healthy;
+      var lastCheck = p.last_check ? fmtTime(p.last_check) : "—";
+      var lastError = p.last_error ? escapeHtml(p.last_error) : "—";
+
+      tr.innerHTML =
+        "<td>" + escapeHtml(p.name) + "</td>" +
+        "<td>" + escapeHtml(p.priority) + "</td>" +
+        "<td><span class=\"dot " + (healthy ? "ok" : "err") + "\"></span>" +
+          (healthy ? "<span class=\"ok\">yes</span>" : "<span class=\"err\">no</span>") + "</td>" +
+        "<td>" + lastCheck + "</td>" +
+        "<td class=\"err\">" + lastError + "</td>";
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ── Traffic timeline (canvas bar chart, bucketed by minute, stacked by provider) ─
+
+  function renderTimeline(traffic) {
+    var canvas = document.getElementById("timeline-canvas");
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width;
+    var h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    var entries = traffic && Array.isArray(traffic.entries) ? traffic.entries : [];
+    var legendEl = document.getElementById("legend");
+    legendEl.innerHTML = "";
+
+    if (entries.length === 0) {
+      ctx.fillStyle = "#9aa3b2";
+      ctx.font = "13px sans-serif";
+      ctx.fillText("No traffic yet", 10, h / 2);
+      return;
+    }
+
+    // Bucket by minute (epoch minute), provider -> count.
+    var buckets = {}; // minuteKey -> { provider: count }
+    var minuteKeys = [];
+    entries.forEach(function (e) {
+      var d = new Date(e.timestamp);
+      if (isNaN(d.getTime())) return;
+      var minuteKey = Math.floor(d.getTime() / 60000);
+      if (!buckets[minuteKey]) {
+        buckets[minuteKey] = {};
+        minuteKeys.push(minuteKey);
+      }
+      var provider = e.provider || "none";
+      buckets[minuteKey][provider] = (buckets[minuteKey][provider] || 0) + 1;
+    });
+
+    minuteKeys.sort(function (a, b) { return a - b; });
+
+    // Fill gaps so the timeline shows continuous minutes.
+    var filledKeys = [];
+    if (minuteKeys.length > 0) {
+      var first = minuteKeys[0];
+      var last = minuteKeys[minuteKeys.length - 1];
+      for (var k = first; k <= last; k++) {
+        filledKeys.push(k);
+      }
+    }
+
+    var providersSeen = {};
+    minuteKeys.forEach(function (mk) {
+      Object.keys(buckets[mk]).forEach(function (p) { providersSeen[p] = true; });
+    });
+
+    var maxTotal = 0;
+    filledKeys.forEach(function (mk) {
+      var total = 0;
+      var b = buckets[mk] || {};
+      Object.keys(b).forEach(function (p) { total += b[p]; });
+      if (total > maxTotal) maxTotal = total;
+    });
+    if (maxTotal === 0) maxTotal = 1;
+
+    var paddingBottom = 24;
+    var paddingTop = 8;
+    var chartH = h - paddingBottom - paddingTop;
+    var barAreaW = w - 10;
+    var barCount = filledKeys.length;
+    var barW = Math.max(4, Math.min(40, barAreaW / Math.max(barCount, 1) - 4));
+    var gap = 4;
+    var totalBarsW = barCount * (barW + gap);
+    var startX = Math.max(10, (w - totalBarsW) / 2);
+
+    filledKeys.forEach(function (mk, i) {
+      var b = buckets[mk] || {};
+      var x = startX + i * (barW + gap);
+      var y = paddingTop + chartH;
+      Object.keys(b).sort().forEach(function (provider) {
+        var count = b[provider];
+        var barH = (count / maxTotal) * chartH;
+        y -= barH;
+        ctx.fillStyle = colorForProvider(provider);
+        ctx.fillRect(x, y, barW, barH);
+      });
+
+      // x-axis label every few bars to avoid clutter.
+      if (barCount <= 20 || i % Math.ceil(barCount / 20) === 0) {
+        var d = new Date(mk * 60000);
+        var label = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+        ctx.fillStyle = "#9aa3b2";
+        ctx.font = "10px sans-serif";
+        ctx.save();
+        ctx.translate(x + barW / 2, h - paddingBottom + 14);
+        ctx.textAlign = "center";
+        ctx.fillText(label, 0, 0);
+        ctx.restore();
+      }
+    });
+
+    // Legend.
+    Object.keys(providersSeen).sort().forEach(function (provider) {
+      var item = document.createElement("span");
+      var swatch = document.createElement("span");
+      swatch.className = "swatch";
+      swatch.style.background = colorForProvider(provider);
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(provider));
+      legendEl.appendChild(item);
+    });
+  }
+
+  // ── Provider / model usage breakdown ─────────────────────────────────
+
+  function renderUsage(traffic) {
+    var tbody = document.querySelector("#usage-table tbody");
+    tbody.innerHTML = "";
+
+    var entries = traffic && Array.isArray(traffic.entries) ? traffic.entries : [];
+    if (entries.length === 0) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td colspan=\"5\" class=\"empty\">No traffic yet</td>";
+      tbody.appendChild(tr);
+      return;
+    }
+
+    var stats = {}; // provider -> { count, inputTokens, outputTokens, durationSum, durationCount }
+    entries.forEach(function (e) {
+      var provider = e.provider || "none";
+      if (!stats[provider]) {
+        stats[provider] = { count: 0, inputTokens: 0, outputTokens: 0, durationSum: 0, durationCount: 0 };
+      }
+      var s = stats[provider];
+      s.count += 1;
+      if (e.usage) {
+        s.inputTokens += e.usage.input_tokens || 0;
+        s.outputTokens += e.usage.output_tokens || 0;
+      }
+      if (typeof e.duration_ms === "number") {
+        s.durationSum += e.duration_ms;
+        s.durationCount += 1;
+      }
+    });
+
+    Object.keys(stats).sort().forEach(function (provider) {
+      var s = stats[provider];
+      var avgDuration = s.durationCount > 0 ? s.durationSum / s.durationCount : 0;
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + escapeHtml(provider) + "</td>" +
+        "<td class=\"num\">" + s.count + "</td>" +
+        "<td class=\"num\">" + s.inputTokens + "</td>" +
+        "<td class=\"num\">" + s.outputTokens + "</td>" +
+        "<td class=\"num\">" + fmtDuration(avgDuration) + "</td>";
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ── Recent requests table ────────────────────────────────────────────
+
+  function renderRequests(traffic) {
+    var tbody = document.querySelector("#requests-table tbody");
+    tbody.innerHTML = "";
+
+    var entries = traffic && Array.isArray(traffic.entries) ? traffic.entries : [];
+    if (entries.length === 0) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td colspan=\"9\" class=\"empty\">No requests yet</td>";
+      tbody.appendChild(tr);
+      return;
+    }
+
+    entries.forEach(function (e) {
+      var tr = document.createElement("tr");
+
+      var sessionLabel = e.session && e.session.label ? e.session.label : "unknown";
+
+      var model;
+      if (e.translated_model && e.translated_model !== e.requested_model) {
+        model = e.requested_model + " → " + e.translated_model;
+      } else {
+        model = e.requested_model;
+      }
+
+      var statusClass = (e.status >= 200 && e.status < 300) ? "ok" : "err";
+
+      var tokens = "—";
+      if (e.usage) {
+        tokens = (e.usage.input_tokens || 0) + "/" + (e.usage.output_tokens || 0);
+      }
+
+      var triedNote = "";
+      if (Array.isArray(e.tried) && e.tried.length > 0) {
+        var chain = e.tried.concat([e.provider || "none"]).join(" → ");
+        triedNote = " <span class=\"tried-note\" title=\"fallback: " + escapeHtml(chain) + "\">⚠︎</span>";
+      }
+
+      tr.innerHTML =
+        "<td>" + fmtTime(e.timestamp) + "</td>" +
+        "<td>" + escapeHtml(sessionLabel) + "</td>" +
+        "<td>" + escapeHtml(e.provider || "—") + triedNote + "</td>" +
+        "<td class=\"model-cell\">" + escapeHtml(model) + "</td>" +
+        "<td class=\"" + statusClass + "\">" + escapeHtml(e.status) + "</td>" +
+        "<td class=\"num\">" + fmtBytes(e.request_bytes) + "</td>" +
+        "<td class=\"num\">" + fmtBytes(e.response_bytes) + "</td>" +
+        "<td class=\"num\">" + tokens + "</td>" +
+        "<td class=\"num\">" + fmtDuration(e.duration_ms) + "</td>";
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ── Render orchestration ─────────────────────────────────────────────
+
+  function render() {
+    renderHeader(lastStatus, lastTraffic);
+    renderHealth(lastStatus, lastTraffic);
+    renderTimeline(lastTraffic);
+    renderUsage(lastTraffic);
+    renderRequests(lastTraffic);
+  }
+
+  function poll() {
+    var statusPromise = fetch("/control/status")
+      .then(function (r) { return r.json(); })
+      .catch(function () { return null; });
+
+    var trafficPromise = fetch("/control/traffic")
+      .then(function (r) { return r.json(); })
+      .catch(function () { return null; });
+
+    Promise.all([statusPromise, trafficPromise]).then(function (results) {
+      var status = results[0];
+      var traffic = results[1];
+
+      if (status === null && traffic === null) {
+        setConnState(false);
+        return;
+      }
+
+      if (status !== null) lastStatus = status;
+      if (traffic !== null) lastTraffic = traffic;
+
+      setConnState(true);
+      render();
+    });
+  }
+
+  poll();
+  setInterval(poll, POLL_INTERVAL_MS);
+})();
+</script>
+</body>
+</html>

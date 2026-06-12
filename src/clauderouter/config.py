@@ -29,6 +29,9 @@ class ProviderConfig:
 class ServerConfig:
     port: int = 4891
     health_interval_secs: int = 30
+    traffic_log_path: str = "~/.local/state/claudeRouter/requests.jsonl"
+    traffic_log_ring_size: int = 500
+    traffic_log_queue_size: int = 1000
 
 
 @dataclass

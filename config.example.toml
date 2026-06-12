@@ -5,6 +5,14 @@
 port = 4891
 health_interval_secs = 30   # how often to probe each provider (seconds)
 
+# Traffic log: powers the /dashboard and GET /control/traffic endpoint.
+# In-memory ring buffer always works; the JSONL file persists recent
+# requests across restarts.
+# traffic_log_path = ""  # set to "" to disable file persistence (ring buffer / dashboard still work)
+traffic_log_path = "~/.local/state/claudeRouter/requests.jsonl"
+traffic_log_ring_size = 500     # number of recent requests kept in memory for the dashboard
+traffic_log_queue_size = 1000   # max entries buffered before new ones are dropped
+
 # ── Provider 1: Anthropic API ────────────────────────────────────────────────
 # Full Claude models. Requires internet + API key.
 # Set ANTHROPIC_API_KEY in your environment (or ~/.profile).
